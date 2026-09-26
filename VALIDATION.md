@@ -12,7 +12,7 @@ These checks distinguish live local behavior from automated simulations. They ar
 
 A subscribed Codex agent planned a synthetic request to switch to workspace 3, open a terminal running `pwd` on the left, and a second terminal running `date` on the right. All five steps executed; two distinct floating terminals were verified on workspace 3 with non-overlapping positions. Test windows were closed and the original workspace restored.
 
-This checks planning, terminal launch, window association, workspace and geometry. It does not yet capture terminal exit codes or prove arbitrary programs succeeded. Unit cases cover scaled/rotated displays, reserved panel areas, geometry verification failures, cancelled prerequisites, ambiguous launches, and concurrent request exclusion.
+This checks planning, terminal launch, window association, workspace and geometry. A later live synthetic Foot command printed a known marker; its private result file recorded exit 0 and the marker. The test terminal was then closed. Unit cases cover terminal success/failure reconciliation, scaled/rotated displays, reserved panel areas, geometry verification failures, cancelled prerequisites, ambiguous launches, and concurrent request exclusion. Exact window focus and named editable field changes have synthetic verification tests; live focus/edit cases still need validation in an unlocked session.
 
 ## Local reminders and memory
 

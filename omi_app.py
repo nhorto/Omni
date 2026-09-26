@@ -101,6 +101,7 @@ class OmiWindow(Gtk.ApplicationWindow):
         self.build_profile()
         self.build_settings()
         self.show_page(page)
+        GLib.timeout_add_seconds(3, self.poll_activity)
         if review is not None:
             GLib.idle_add(self.start_review, review)
 
@@ -539,6 +540,7 @@ class OmiWindow(Gtk.ApplicationWindow):
             actions = db.execute("SELECT request,status,result,created_at FROM actions ORDER BY id DESC LIMIT 60").fetchall()
             calls = db.execute("SELECT agent,model,purpose,duration_ms,created_at FROM agent_calls ORDER BY id DESC LIMIT 30").fetchall()
             tasks = db.execute("SELECT id,request,status,feedback,created_at FROM task_runs WHERE mode='action' ORDER BY id DESC LIMIT 40").fetchall()
+        self.activity_pending = any(status == "awaiting_commands" for _, _, status, _, _ in tasks)
         while child := self.task_list.get_first_child():
             self.task_list.remove(child)
         for ident, request, status, feedback, created in tasks:
@@ -565,6 +567,11 @@ class OmiWindow(Gtk.ApplicationWindow):
         lines.append("\nAGENT CALLS")
         lines.extend(f"{created[:19]} · {agent} / {model} · {purpose} · {duration} ms" for agent, model, purpose, duration, created in calls)
         self.activity_view.get_buffer().set_text("\n\n".join(lines))
+
+    def poll_activity(self) -> bool:
+        if self.stack.get_visible_child_name() == "activity" and getattr(self, "activity_pending", False):
+            self.refresh_activity()
+        return True
 
     def mark_task(self, ident: int, verdict: str, note: str = "") -> None:
         try:

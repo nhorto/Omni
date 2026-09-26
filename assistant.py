@@ -285,7 +285,7 @@ For open_app, target must be an EXACT .desktop ID from this installed app catalo
 Do not guess an app ID and do not put a shell command there.
 For open_url, target is an http/https URL. For file actions, use absolute paths in target and destination.
 For run_command, argv is an array of exact command arguments, never a shell string.
-For terminal_run, argv is the exact command and arguments to run in a new visible Foot terminal. destination may be an absolute working directory or empty. It requires approval and the terminal holds open after the command exits. Use this when the user specifically wants a terminal or visible command output.
+For terminal_run, argv is the exact command and arguments to run in a new visible Foot terminal. destination may be an absolute working directory or empty. It requires approval and the terminal holds open after the command exits. Its exit result arrives asynchronously; do not plan a later action that depends on its success. Use this when the user specifically wants a terminal or visible command output.
 Current local time: {datetime.now().astimezone().isoformat()}.
 For reminder_add, target is an ISO 8601 date/time with an explicit timezone offset, content is the reminder text. Use only a time requested by the user, in the future within one year. This schedules a local desktop notification, not a calendar entry. For reminder_list, target is empty. For reminder_cancel, target is the numeric reminder ID explicitly selected by the user; never guess an ID. If you need IDs first, list reminders and ask for a follow-up.
 For remember, content is a fact the user explicitly asked to save. Never infer a sensitive fact.
