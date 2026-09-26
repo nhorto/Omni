@@ -26,3 +26,14 @@ The definition of done is the complete personal-assistant vision, including proa
 ## Release evidence
 
 Each completed item needs a specific test or observed outcome, not just an implemented function. Document live checks separately from simulations. The release remains unfinished while required acceptance checks are open. Mail/calendar account work is intentionally deferred until the account is set up.
+
+### Live checks on this development machine
+
+- 2026-09-26: Super+Ctrl+X dictation showed **Dictation recording** on the floating card while capturing into a focused text field.
+- 2026-09-26: Clicking the Omi bar item opened its action menu.
+- 2026-09-26: Super+Shift+H with “Open a terminal” opened a terminal directly, without a Send button or approval window.
+- The longer two-terminal Bash/Codex request now has a passing simulated voice-path test; it still needs a live retry. The 600-second Voxtype cutoff and continuous restart behavior also need long-duration live checks.
+
+### Latency baseline
+
+On 2026-09-26, six recorded Codex planning calls averaged 8.7 seconds and the slowest took 17.2 seconds. Exact common commands such as “Open a terminal” use the local planner and avoid that call. Broader speed work should be measured against these timings.
