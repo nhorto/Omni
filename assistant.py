@@ -195,7 +195,7 @@ def doctor() -> list[tuple[str, str]]:
             checks.append(("Hyprland session", "available"))
         except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
             checks.append(("Hyprland session", "unavailable"))
-    for name, executable in (("Voxtype input", "voxtype"), ("PipeWire capture", "pw-record"), ("PipeWire playback", "pw-play"), ("Keyring for ElevenLabs", "secret-tool")):
+    for name, executable in (("Voxtype input", "voxtype"), ("PipeWire capture", "pw-record"), ("PipeWire playback", "pw-play"), ("Screen capture", "grim"), ("Screen text recognition", "tesseract"), ("Keyring for ElevenLabs", "secret-tool")):
         checks.append((name, "found" if shutil.which(executable) else "not configured"))
     voice = Path(settings().get("voice_model", str(DATA / "tts/voices/en_US-lessac-medium.onnx")))
     piper_ready = (DATA / "tts/piper/piper").is_file() and voice.is_file() and Path(str(voice) + ".json").is_file()
@@ -581,6 +581,8 @@ def validate_action(action: dict) -> None:
             raise ValueError(f"Invalid {field}")
     kind = action["type"]
     target = action.get("target") or ""
+    if kind == "screen_read" and any(action.get(field) for field in ("target", "destination", "content", "argv")):
+        raise ValueError("Screen reading does not take a target or extra input")
     if kind in {"open_app", "open_url", "list_files", "copy_file", "move_file", "trash_file", "recall", "browser_open", "browser_click", "browser_fill", "desktop_read", "desktop_click", "email_prepare", "email_send"} and not isinstance(target, str):
         raise ValueError("Invalid target")
     if kind in {"list_files", "copy_file", "move_file", "trash_file"} and not Path(target).is_absolute():
