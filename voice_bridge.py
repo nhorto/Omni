@@ -31,6 +31,32 @@ def omi_recording() -> Path:
     return omi.RUNTIME / "omi-recording"
 
 
+def mode_active(path: Path, expected: str) -> bool:
+    try:
+        return path.read_text().strip() == expected
+    except OSError:
+        return False
+
+
+def set_mode(path: Path, value: str) -> None:
+    prepare()
+    temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
+    try:
+        temporary.write_text(value + "\n")
+        temporary.chmod(0o600)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def is_omi_recording() -> bool:
+    return mode_active(omi_recording(), "omi")
+
+
+def continuous_enabled() -> bool:
+    return mode_active(CONTINUOUS, "on")
+
+
 def prepare() -> None:
     for directory in (omi.RUNTIME, INBOX, PENDING):
         omi.private_dir(directory)
@@ -65,22 +91,21 @@ def run_voxtype(*args: str) -> None:
 
 def start_utterance() -> Path:
     path = new_transcript_path()
-    omi_recording().write_text("omi\n")
-    omi_recording().chmod(0o600)
+    set_mode(omi_recording(), "omi")
     try:
         run_voxtype("start", f"--file={path}", "--no-osd")
     except Exception:
-        omi_recording().unlink(missing_ok=True)
+        set_mode(omi_recording(), "idle")
         raise
     return path
 
 
 def toggle_utterance() -> None:
-    if CONTINUOUS.exists():
+    if continuous_enabled():
         stop_listening()
         return
     if voxtype_state() == "recording":
-        if not omi_recording().exists():
+        if not is_omi_recording():
             raise RuntimeError("Dictation is recording. Finish dictation before talking to Omi.")
         run_voxtype("stop")
         print("Transcribing")
@@ -92,12 +117,12 @@ def toggle_utterance() -> None:
 
 
 def stop_listening() -> None:
-    CONTINUOUS.unlink(missing_ok=True)
-    if omi_recording().exists() and voxtype_state() == "recording":
+    set_mode(CONTINUOUS, "off")
+    if is_omi_recording() and voxtype_state() == "recording":
         run_voxtype("stop")
-    elif omi_recording().exists() and voxtype_state() == "transcribing":
+    elif is_omi_recording() and voxtype_state() == "transcribing":
         pass
-    omi_recording().unlink(missing_ok=True)
+    set_mode(omi_recording(), "idle")
     omi.set_state("idle", omi.settings()["agent"])
     print("Omi listening stopped")
 
@@ -190,14 +215,15 @@ def monitor_silence(stop_event: threading.Event, threshold_dbfs: float = -38.0, 
                 break
             decision = gate.observe(data, time.monotonic())
             if decision:
-                if voxtype_state() == "recording" and CONTINUOUS.exists():
+                if voxtype_state() == "recording" and continuous_enabled():
                     try:
                         run_voxtype(decision)
                     except RuntimeError as exc:
                         print(f"Could not {decision} recording: {exc}", file=sys.stderr, flush=True)
                 break
-        if process.poll() is not None and not stop_event.is_set() and CONTINUOUS.exists():
-            CONTINUOUS.unlink(missing_ok=True)
+        if process.poll() is not None and not stop_event.is_set() and continuous_enabled():
+            set_mode(CONTINUOUS, "off")
+            set_mode(omi_recording(), "idle")
             if voxtype_state() == "recording":
                 try:
                     run_voxtype("cancel")
@@ -218,8 +244,8 @@ def handle_transcript(path: Path) -> None:
     claimed = path.with_suffix(".processing")
     path.replace(claimed)
     text = claimed.read_text(errors="replace").strip()
-    if not CONTINUOUS.exists():
-        omi_recording().unlink(missing_ok=True)
+    if not continuous_enabled():
+        set_mode(omi_recording(), "idle")
     if not text:
         claimed.unlink(missing_ok=True)
         return
@@ -248,7 +274,8 @@ def reminder_worker(stop_event: threading.Event) -> None:
 def serve() -> None:
     global RUNNING
     prepare()
-    omi_recording().unlink(missing_ok=True)
+    set_mode(omi_recording(), "idle")
+    set_mode(CONTINUOUS, "off")
     for stale in INBOX.glob("*.processing"):
         stale.replace(stale.with_suffix(".interrupted.failed"))
     omi.set_state("idle", omi.settings()["agent"])
@@ -279,9 +306,9 @@ def serve() -> None:
             continue
         if current and voxtype_state() == "idle" and not current.exists() and time.monotonic() - current_started > 5:
             current = None
-        if not CONTINUOUS.exists() and omi_recording().exists() and voxtype_state() == "idle" and time.time() - omi_recording().stat().st_mtime > 8:
-            omi_recording().unlink(missing_ok=True)
-        if CONTINUOUS.exists() and current is None and voxtype_state() == "idle":
+        if not continuous_enabled() and is_omi_recording() and voxtype_state() == "idle" and time.time() - omi_recording().stat().st_mtime > 8:
+            set_mode(omi_recording(), "idle")
+        if continuous_enabled() and current is None and voxtype_state() == "idle":
             try:
                 current = start_utterance()
                 current_started = time.monotonic()
@@ -317,15 +344,14 @@ def main() -> int:
     elif args.command == "stop":
         stop_listening()
     elif args.command == "status":
-        print(json.dumps({"voxtype": voxtype_state(), "continuous": CONTINUOUS.exists()}))
+        print(json.dumps({"voxtype": voxtype_state(), "continuous": continuous_enabled()}))
     elif args.command == "continuous":
-        enable = args.mode == "on" or (args.mode == "toggle" and not CONTINUOUS.exists())
+        enable = args.mode == "on" or (args.mode == "toggle" and not continuous_enabled())
         prepare()
         if enable:
-            if voxtype_state() == "recording" and not omi_recording().exists():
+            if voxtype_state() == "recording" and not is_omi_recording():
                 raise RuntimeError("Finish dictation before enabling Omi continuous listening")
-            CONTINUOUS.write_text("on\n")
-            CONTINUOUS.chmod(0o600)
+            set_mode(CONTINUOUS, "on")
             print("Continuous listening enabled")
         else:
             stop_listening()

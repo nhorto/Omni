@@ -668,6 +668,8 @@ def needs_approval(action: dict) -> bool:
         argv = action.get("argv") or []
         if argv == ["pwd"]:
             return False
+        if kind == "terminal_run" and argv in (["bash"], ["codex"]):
+            return False
         if argv and argv[0] == "ls" and all(not arg.startswith("-") or re.fullmatch(r"-[alh1]+", arg) for arg in argv[1:]):
             return False
         if len(argv) >= 2 and argv[0] == "cat" and all(not arg.startswith("-") and Path(arg).is_file() for arg in argv[1:]):

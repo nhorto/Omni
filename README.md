@@ -37,7 +37,7 @@ python3 install.py --apply
 
 The installer backs up replaced integration files. It does not install packages or change shortcuts. Follow [integration setup](integration/README.md) to enable the service and recording indicators. Keep the checkout in place; installed launchers refer to it.
 
-Suggested shortcuts are **Super+H** for the app, **Super+Shift+H** for one voice utterance, and **Super+Alt+H** for continuous listening. On Omarchy, **Super+Ctrl+X** is Voxtype dictation into the focused text field. Dictation does not send a request to Omi. The bar label and floating card distinguish the two recording modes; click the bar item to start or finish a voice request. Check existing bindings before assigning them.
+Suggested shortcuts are **Super+H** for the app, **Super+Shift+H** for one voice utterance, and **Super+Alt+H** for continuous listening. On Omarchy, **Super+Ctrl+X** is Voxtype dictation into the focused text field. Dictation does not send a request to Omi. The bar label and floating card distinguish the two recording modes; click the bar item for an action menu with voice, dictation, app, and settings controls. Check existing bindings before assigning them.
 
 Omi sends a spoken request automatically when recording finishes. Typed requests in the app use Send. Harmless desktop actions do not require confirmation; consequential actions open a review window. Settings offers automatic model choice or an explicit Codex model. Automatic choice currently uses GPT-6 Sol for requests needing an agent; exact local commands bypass the agent.
 

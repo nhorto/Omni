@@ -214,8 +214,8 @@ class OmiWindow(Gtk.ApplicationWindow):
 
     def refresh_voice_buttons(self) -> None:
         state = voice_bridge.voxtype_state()
-        continuous = voice_bridge.CONTINUOUS.exists()
-        omi_recording = voice_bridge.omi_recording().exists()
+        continuous = voice_bridge.continuous_enabled()
+        omi_recording = voice_bridge.is_omi_recording()
         self.talk_button.set_label("Stop continuous listening" if continuous else "Finish and send to Omi" if omi_recording and state == "recording" else "●  Talk to Omi")
         self.talk_button.set_sensitive(state != "transcribing" and (state != "recording" or omi_recording))
         self.continuous_button.set_label("Stop continuous listening" if continuous else "Continuous listening")

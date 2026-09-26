@@ -13,16 +13,21 @@ from pathlib import Path
 def run(result_path: Path, argv: list[str]) -> int:
     tail = bytearray()
     try:
-        process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=None)
-        assert process.stdout is not None
-        while chunk := os.read(process.stdout.fileno(), 4096):
-            sys.stdout.buffer.write(chunk)
-            sys.stdout.buffer.flush()
-            tail.extend(chunk)
-            if len(tail) > 4000:
-                del tail[:-4000]
-        process.stdout.close()
-        code = process.wait()
+        if argv in (["bash"], ["codex"]):
+            # Interactive programs need Foot's real terminal on all three streams.
+            code = subprocess.run(argv).returncode
+            tail = bytearray(b"Interactive session output was not captured")
+        else:
+            process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=None)
+            assert process.stdout is not None
+            while chunk := os.read(process.stdout.fileno(), 4096):
+                sys.stdout.buffer.write(chunk)
+                sys.stdout.buffer.flush()
+                tail.extend(chunk)
+                if len(tail) > 4000:
+                    del tail[:-4000]
+            process.stdout.close()
+            code = process.wait()
     except OSError as exc:
         code = 127
         tail = bytearray(f"{type(exc).__name__}: {exc}".encode())

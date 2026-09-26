@@ -102,6 +102,8 @@ class OmiCoreTests(unittest.TestCase):
         exercise = Path(self.temp.name) / "exercise.md"
         exercise.write_text("step 1\nstep 2\n")
         self.assertFalse(assistant.needs_approval({"type": "terminal_run", "argv": ["pwd"]}))
+        self.assertFalse(assistant.needs_approval({"type": "terminal_run", "argv": ["bash"]}))
+        self.assertFalse(assistant.needs_approval({"type": "terminal_run", "argv": ["codex"]}))
         self.assertFalse(assistant.needs_approval({"type": "terminal_run", "argv": ["cat", str(exercise)]}))
         self.assertFalse(assistant.needs_approval({"type": "terminal_run", "argv": ["sed", "-n", "1,2p", str(exercise)]}))
         self.assertFalse(assistant.needs_approval({"type": "terminal_run", "argv": ["tmux", "new-session", "-c", self.temp.name]}))
@@ -126,7 +128,14 @@ class OmiCoreTests(unittest.TestCase):
         with patch.object(voice_bridge, "VOICE_STATE", state), patch.object(voice_bridge, "CONTINUOUS", Path(self.temp.name) / "continuous"), patch.object(voice_bridge, "run_voxtype") as record, patch.object(assistant, "set_state"):
             voice_bridge.stop_listening()
         record.assert_called_once_with("stop")
-        self.assertFalse(marker.exists())
+        self.assertEqual(marker.read_text().strip(), "idle")
+
+    def test_capture_mode_file_clears_between_omi_and_dictation(self):
+        marker = assistant.RUNTIME / "omi-recording"
+        voice_bridge.set_mode(marker, "omi")
+        self.assertTrue(voice_bridge.is_omi_recording())
+        voice_bridge.set_mode(marker, "idle")
+        self.assertFalse(voice_bridge.is_omi_recording())
 
     def test_codex_json_usage_is_stored_without_event_text(self):
         events = '\n'.join((
@@ -268,6 +277,29 @@ class OmiCoreTests(unittest.TestCase):
                 self.assertEqual(assistant.reconcile_terminal_jobs(db), 1)
                 self.assertEqual(db.execute("SELECT status FROM task_runs WHERE id=?", (run_id,)).fetchone()[0], expected)
                 self.assertFalse((jobs / f"{job_id}.json").exists())
+
+    def test_interactive_terminal_keeps_its_tty(self):
+        from terminal_job import run
+        import json
+        target = Path(self.temp.name) / "interactive.json"
+        with patch("terminal_job.subprocess.run") as launch, patch("terminal_job.subprocess.Popen") as pipe, contextlib.redirect_stdout(io.StringIO()):
+            launch.return_value.returncode = 0
+            run(target, ["codex"])
+        launch.assert_called_once_with(["codex"])
+        pipe.assert_not_called()
+        self.assertEqual(json.loads(target.read_text())["exit_code"], 0)
+
+    def test_voice_opens_requested_shell_and_codex_without_review_window(self):
+        proposal = plan("action", {"type": "terminal_run", "argv": ["bash"]}, {"type": "terminal_run", "argv": ["codex"]})
+        executed = []
+        def plan_request(*_args):
+            return proposal
+        def record_request(request, _agent, _db, **_kwargs):
+            executed.append(request)
+        with patch.object(voice_bridge.omi, "plan_request", new=plan_request), patch.object(voice_bridge.omi, "run_request", new=record_request), patch.object(voice_bridge, "review_in_app") as review:
+            voice_bridge.process_request("Open two terminals, one with Codex")
+        review.assert_not_called()
+        self.assertEqual(executed, ["Open two terminals, one with Codex"])
 
     def test_concurrent_request_cannot_execute_while_approval_is_pending(self):
         command = {"type": "run_command", "target": "", "destination": "", "content": "", "argv": ["printf", "test"]}
