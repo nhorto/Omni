@@ -76,6 +76,27 @@ def focus_window(address: str) -> str:
     raise RuntimeError("Window focus could not be verified")
 
 
+NAVIGATION_SHORTCUTS = {
+    "CTRL+L", "CTRL+T", "CTRL+W", "CTRL+F", "CTRL+TAB", "CTRL+SHIFT+TAB",
+    "ALT+LEFT", "ALT+RIGHT", "ESCAPE", "TAB", "SHIFT+TAB",
+}
+
+
+def send_navigation_shortcut(address: str, chord: str) -> str:
+    item = window(address)
+    chord = chord.upper().replace(" ", "")
+    if chord not in NAVIGATION_SHORTCUTS:
+        raise ValueError("Shortcut is outside the supported navigation set")
+    parts = chord.split("+")
+    modifiers, key = " ".join(parts[:-1]), parts[-1]
+    expression = f'hl.dsp.send_shortcut({{ mods = "{modifiers}", key = "{key}", window = "address:{address}" }})'
+    result = subprocess.run(["hyprctl", "dispatch", expression], capture_output=True, text=True, timeout=10, check=True)
+    if "ok" not in result.stdout.lower():
+        raise RuntimeError("Hyprland did not accept the shortcut")
+    window(address)
+    return f"Sent {chord} to {item['title'] or item['class']}; app effect not verified"
+
+
 def detect_new_window(before: set[str], timeout: float = 4.0, expected_class: str | None = None) -> str | None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:

@@ -14,6 +14,8 @@ A subscribed Codex agent planned a synthetic request to switch to workspace 3, o
 
 This checks planning, terminal launch, window association, workspace and geometry. A later live synthetic Foot command printed a known marker; its private result file recorded exit 0 and the marker. The test terminal was then closed. Unit cases cover terminal success/failure reconciliation, scaled/rotated displays, reserved panel areas, geometry verification failures, cancelled prerequisites, ambiguous launches, and concurrent request exclusion. Exact window focus and named editable field changes have synthetic verification tests; live focus/edit cases still need validation in an unlocked session.
 
+A separate synthetic Foot window received `CTRL+L` through Hyprland's exact-address shortcut dispatcher, which returned success. The test window was closed. This verifies dispatch acceptance and targeting, not the application effect; arbitrary keyboard and mouse control remain open work.
+
 ## Local reminders and memory
 
 A synthetic reminder was scheduled in the local database. The running background service delivered it to the real notification daemon and stored the returned notification ID after one attempt. The app exposed its Reminders page and Add reminder control through accessibility.

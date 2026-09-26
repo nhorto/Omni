@@ -4,6 +4,17 @@ import hypr
 
 
 class WindowGeometryTests(unittest.TestCase):
+    def test_shortcut_is_targeted_and_limited_to_navigation(self):
+        item = {'address': '0x1234', 'workspace': 2, 'title': 'Browser', 'class': 'browser'}
+        with patch.object(hypr, 'window', return_value=item), patch.object(hypr.subprocess, 'run') as run:
+            run.return_value.stdout = 'ok'
+            self.assertIn('app effect not verified', hypr.send_navigation_shortcut('0x1234', 'CTRL+L'))
+            self.assertIn('window = "address:0x1234"', run.call_args.args[0][-1])
+            self.assertIn('mods = "CTRL", key = "L"', run.call_args.args[0][-1])
+            with self.assertRaisesRegex(ValueError, 'navigation set'):
+                hypr.send_navigation_shortcut('0x1234', 'CTRL+ENTER')
+            self.assertEqual(run.call_count, 1)
+
     def test_focus_requires_active_window_to_match_exact_address(self):
         item = {'address': '0x1234', 'workspace': 2, 'title': 'Notes', 'class': 'notes'}
         with patch.object(hypr, 'window', return_value=item), patch.object(hypr, '_json', return_value={'address': '0x1234'}), patch.object(hypr.subprocess, 'run') as run:

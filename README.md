@@ -8,7 +8,7 @@ A personal desktop assistant for Omarchy Linux: describe what you want in text o
 
 - Native GTK app with conversations, editable local memory, searchable knowledge notes, activity review, and settings.
 - Codex or Claude CLI adapters using their existing sign-in. Exact reminders, memories, workspace changes, URLs, and folder listings can run locally without an agent call; model overrides are available.
-- Workspace switching, exact existing-window focus, window moves and placement, app/site launches, and visible terminals with approved commands.
+- Workspace switching, exact existing-window focus, approved navigation shortcuts, window moves and placement, app/site launches, and visible terminals with approved commands.
 - Separate Chromium profile for browser reading, clicks, and form input, plus accessible desktop controls and named text fields via AT-SPI.
 - Voxtype transcript intake, push-to-talk and continuous mode, a bar indicator and movable recording card. Reviewed voice requests release the bridge after the task finishes, even when the app stays open. Hardware testing remains required.
 - Spoken answers to questions via local Piper or a configured ElevenLabs voice. Action requests stay quiet.

@@ -171,6 +171,13 @@ class OmiCoreTests(unittest.TestCase):
             self.assertEqual([row[0] for row in db.execute("SELECT status FROM actions ORDER BY id")], ["pending", "failed"])
             self.assertEqual(db.execute("SELECT status FROM task_runs").fetchone()[0], "partial")
 
+    def test_window_shortcut_requires_approval_and_exact_window(self):
+        action = {"type": "window_shortcut", "target": "0x1234", "destination": "", "content": "CTRL+L", "argv": []}
+        with assistant.database() as db, patch.object(hypr, "window", return_value={"title": "Browser", "class": "browser"}), patch.object(hypr, "send_navigation_shortcut") as shortcut, patch.object(hypr, "available_windows", return_value=[]), contextlib.redirect_stdout(io.StringIO()):
+            assistant.run_request("Focus the address bar", "codex", db, plan=plan("action", action), approve=lambda _: False)
+            shortcut.assert_not_called()
+            self.assertEqual(db.execute("SELECT status FROM actions").fetchone()[0], "cancelled")
+
     def test_declined_terminal_stops_following_desktop_actions(self):
         terminal = {"type": "terminal_run", "target": "", "destination": "", "content": "", "argv": ["printf", "hello"]}
         placement = {"type": "window_place", "target": "last_opened", "destination": "right", "content": "", "argv": []}
