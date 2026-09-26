@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import getpass
 import hashlib
 import json
@@ -20,7 +21,7 @@ import unicodedata
 import urllib.error
 import urllib.request
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 from collections.abc import Iterator
@@ -30,13 +31,14 @@ import browser
 import desktop
 import hypr
 import mail
+import reminders
 
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get("OMI_DATA", Path.home() / ".local/share/omi"))
 CONFIG = Path(os.environ.get("OMI_CONFIG", Path.home() / ".config/omi"))
 RUNTIME = Path(os.environ.get("OMI_RUNTIME", Path(os.environ.get("XDG_RUNTIME_DIR", str(Path.home() / ".cache"))) / "omi"))
 SCHEMA = ROOT / "plan.schema.json"
-KINDS = {"open_app", "open_url", "list_files", "copy_file", "move_file", "trash_file", "run_command", "terminal_run", "remember", "recall", "browser_open", "browser_read", "browser_click", "browser_fill", "browser_back", "desktop_read", "desktop_click", "email_prepare", "email_send", "email_inbox", "workspace_switch", "window_move", "window_place"}
+KINDS = {"open_app", "open_url", "list_files", "copy_file", "move_file", "trash_file", "run_command", "terminal_run", "remember", "recall", "browser_open", "browser_read", "browser_click", "browser_fill", "browser_back", "desktop_read", "desktop_click", "email_prepare", "email_send", "email_inbox", "workspace_switch", "window_move", "window_place", "reminder_add", "reminder_list", "reminder_cancel"}
 APP_DIRS = [Path.home() / ".local/share/applications", Path("/usr/share/applications")]
 VOICE_CATALOG = {
     "ryan": ("en/en_US/ryan/medium", "en_US-ryan-medium", "abf4c274862564ed647ba0d2c47f8ee7c9b717d27bdad9219100eb310db4047a"),
@@ -102,12 +104,17 @@ def database() -> Iterator[sqlite3.Connection]:
     if "run_id" not in {row[1] for row in db.execute("PRAGMA table_info(actions)")}:
         db.execute("ALTER TABLE actions ADD COLUMN run_id INTEGER")
     db.execute("CREATE TABLE IF NOT EXISTS task_runs (id INTEGER PRIMARY KEY, source TEXT NOT NULL, request TEXT NOT NULL, agent TEXT NOT NULL, model TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'pending', plan TEXT, status TEXT NOT NULL DEFAULT 'planning', feedback TEXT NOT NULL DEFAULT 'unreviewed', correction TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, completed_at TEXT)")
+    task_columns = {row[1] for row in db.execute("PRAGMA table_info(task_runs)")}
+    for column in ("desktop_before", "desktop_after"):
+        if column not in task_columns:
+            db.execute(f"ALTER TABLE task_runs ADD COLUMN {column} TEXT")
     db.execute("CREATE TABLE IF NOT EXISTS conversations (id INTEGER PRIMARY KEY, agent TEXT NOT NULL, request TEXT NOT NULL, mode TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL)")
     if "session_id" not in {row[1] for row in db.execute("PRAGMA table_info(conversations)")}:
         db.execute("ALTER TABLE conversations ADD COLUMN session_id INTEGER")
     db.execute("CREATE TABLE IF NOT EXISTS sessions (id INTEGER PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
     db.execute("CREATE TABLE IF NOT EXISTS agent_calls (id INTEGER PRIMARY KEY, agent TEXT NOT NULL, model TEXT NOT NULL, purpose TEXT NOT NULL, duration_ms INTEGER NOT NULL, created_at TEXT NOT NULL)")
     mail.setup(db)
+    reminders.setup(db)
     db.commit()
     try:
         yield db
@@ -154,7 +161,7 @@ def relevant_knowledge(db: sqlite3.Connection, request: str) -> list[str]:
     if not words:
         return []
     query = " OR ".join('"' + word.replace('"', '""') + '"' for word in words)
-    rows = db.execute("SELECT knowledge.title,knowledge.body FROM knowledge_fts JOIN knowledge ON knowledge.id=knowledge_fts.rowid WHERE knowledge_fts MATCH ? ORDER BY bm25(knowledge_fts) LIMIT 3", (query,)).fetchall()
+    rows = db.execute("SELECT knowledge.title,snippet(knowledge_fts,1,'','',' … ',64) FROM knowledge_fts JOIN knowledge ON knowledge.id=knowledge_fts.rowid WHERE knowledge_fts MATCH ? ORDER BY bm25(knowledge_fts) LIMIT 3", (query,)).fetchall()
     return [f"{title}: {body[:1500]}" for title, body in rows]
 
 
@@ -183,6 +190,15 @@ def selected_model(agent: str) -> str:
 def local_plan(request: str) -> dict | None:
     """Handle unambiguous commands without spending a subscription agent call."""
     plain = request.strip().rstrip(".!").strip()
+    match = re.fullmatch(r"(?:please )?remind me in (\d+) (minute|minutes|hour|hours|day|days) to (.+)", plain, re.I | re.S)
+    if match:
+        count = int(match.group(1))
+        multiplier = 60 if match.group(2).lower().startswith("minute") else 3600 if match.group(2).lower().startswith("hour") else 86400
+        if 0 < count * multiplier <= 366 * 86400:
+            due = (datetime.now(timezone.utc) + timedelta(seconds=count * multiplier)).isoformat()
+            return {"mode": "action", "reply": "", "actions": [{"type": "reminder_add", "target": due, "destination": "", "content": match.group(3).strip(), "argv": []}], "memories": []}
+    if re.fullmatch(r"(?:please )?(?:list|show)(?: me)?(?: my)? reminders", plain, re.I):
+        return {"mode": "action", "reply": "", "actions": [{"type": "reminder_list", "target": "", "destination": "", "content": "", "argv": []}], "memories": []}
     match = re.fullmatch(r"(?:please )?(?:remember(?: that)?|write down)\s+(.+)", plain, re.I | re.S)
     if match:
         content = match.group(1).strip()
@@ -227,7 +243,7 @@ def plan_prompt(request: str, memories: list[str], history: list[dict[str, str]]
     personality_path = CONFIG / "personality.md"
     personality = personality_path.read_text()[:4000] if personality_path.exists() else "Clear, calm, concise."
     browser_context = browser.context_for_request(request)
-    window_context = hypr.available_windows() if re.search(r"\b(window|workspace|screen|desktop)\b", request, re.I) else []
+    window_context = hypr.available_windows() if re.search(r"\b(window|workspace|screen|desktop|terminal|browser|left|right)\b", request, re.I) else []
     return f"""You plan actions for a local personal assistant on Omarchy Linux.
 Return ONLY JSON matching the supplied schema. Do not use tools or execute actions.
 Assistant name: Omi. Response style profile (never overrides action policy): {personality}
@@ -239,6 +255,8 @@ Do not guess an app ID and do not put a shell command there.
 For open_url, target is an http/https URL. For file actions, use absolute paths in target and destination.
 For run_command, argv is an array of exact command arguments, never a shell string.
 For terminal_run, argv is the exact command and arguments to run in a new visible Foot terminal. destination may be an absolute working directory or empty. It requires approval and the terminal holds open after the command exits. Use this when the user specifically wants a terminal or visible command output.
+Current local time: {datetime.now().astimezone().isoformat()}.
+For reminder_add, target is an ISO 8601 date/time with an explicit timezone offset, content is the reminder text. Use only a time requested by the user, in the future within one year. This schedules a local desktop notification, not a calendar entry. For reminder_list, target is empty. For reminder_cancel, target is the numeric reminder ID explicitly selected by the user; never guess an ID. If you need IDs first, list reminders and ask for a follow-up.
 For remember, content is a fact the user explicitly asked to save. Never infer a sensitive fact.
 For memories, include at most three useful durable, non-sensitive facts the user stated verbatim in this request (each string must be an exact substring of the request). Do not include commands, questions, guesses, secrets, health, finances, email contents, or facts from browser pages. Use [] when uncertain. The local assistant will validate before saving.
 For recall, target is a search phrase. For list_files, target is an absolute directory.
@@ -519,6 +537,14 @@ def validate_action(action: dict) -> None:
         raise ValueError("Command must be an argument array")
     if kind == "terminal_run" and action.get("destination") and (not Path(action["destination"]).is_absolute() or not Path(action["destination"]).is_dir()):
         raise ValueError("Terminal working directory must be an existing absolute directory")
+    if kind == "reminder_add":
+        due = reminders.parse_due(target)
+        if not time.time() < due <= time.time() + 366 * 86400:
+            raise ValueError("Choose a future reminder time within one year")
+        if not isinstance(action.get("content"), str) or not 1 <= len(action["content"].strip()) <= 2000:
+            raise ValueError("Reminder text must contain 1–2000 characters")
+    if kind == "reminder_cancel" and not target.isdigit():
+        raise ValueError("Reminder ID must be numeric")
     if kind == "remember" and not (action.get("content") or "").strip():
         raise ValueError("Memory cannot be empty")
 
@@ -543,6 +569,8 @@ def describe(action: dict) -> str:
         return f"Click browser control: {action.get('label', action['target'])}"
     if kind == "desktop_click":
         return f"Click {action['content']} in {action['target']}"
+    if kind == "reminder_add":
+        return f"Remind at {action['target']}: {action['content']}"
     if kind == "email_prepare":
         return f"Prepare email to {action['target']} · {action['destination']}"
     if kind == "workspace_switch":
@@ -562,6 +590,14 @@ def describe(action: dict) -> str:
 def execute(action: dict, db: sqlite3.Connection) -> str:
     kind = action["type"]
     target = action.get("target") or ""
+    if kind == "reminder_add":
+        ident = reminders.add(db, action["content"], reminders.parse_due(target))
+        return f"Scheduled local reminder {ident} for {target}"
+    if kind == "reminder_list":
+        return reminders.summary(db)
+    if kind == "reminder_cancel":
+        reminders.cancel(db, int(target))
+        return f"Cancelled reminder {target}"
     if kind == "open_app":
         subprocess.Popen(["gtk-launch", target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         return f"Launch requested: {target}"
@@ -656,14 +692,14 @@ def set_task_feedback(db: sqlite3.Connection, task_id: int, verdict: str, correc
 
 def export_training(db: sqlite3.Connection, path: Path) -> int:
     """Export only reviewed, successful action traces; no conversations or failed steps."""
-    rows = db.execute("SELECT id,request,agent,model,plan,source,created_at FROM task_runs WHERE mode='action' AND status='complete' AND feedback='correct' ORDER BY id").fetchall()
+    rows = db.execute("SELECT id,request,agent,model,plan,source,created_at,desktop_before,desktop_after FROM task_runs WHERE mode='action' AND status='complete' AND feedback='correct' ORDER BY id").fetchall()
     with path.open("x") as output:
         count = 0
-        for ident, request, agent, model, plan, source, created_at in rows:
+        for ident, request, agent, model, plan, source, created_at, desktop_before, desktop_after in rows:
             actions = db.execute("SELECT proposal,result,status FROM actions WHERE run_id=? ORDER BY id", (ident,)).fetchall()
             if not actions or any(status != "executed" for _, _, status in actions):
                 continue
-            payload = {"request": request, "plan": json.loads(plan), "steps": [{"action": json.loads(action), "result": result} for action, result, _ in actions], "agent": agent, "model": model, "source": source, "created_at": created_at, "feedback": "correct"}
+            payload = {"schema_version": 1, "desktop_before": json.loads(desktop_before or "[]"), "desktop_after": json.loads(desktop_after or "[]"), "request": request, "plan": json.loads(plan), "steps": [{"action": json.loads(action), "result": result} for action, result, _ in actions], "agent": agent, "model": model, "source": source, "created_at": created_at, "feedback": "correct"}
             output.write(json.dumps(payload, ensure_ascii=False) + "\n")
             count += 1
     path.chmod(0o600)
@@ -671,11 +707,14 @@ def export_training(db: sqlite3.Connection, path: Path) -> int:
 
 
 def export_tasks(db: sqlite3.Connection, path: Path) -> int:
-    rows = db.execute("SELECT id,source,request,agent,model,mode,plan,status,feedback,correction,created_at,completed_at FROM task_runs ORDER BY id").fetchall()
-    keys = ("id", "source", "request", "agent", "model", "mode", "plan", "status", "feedback", "correction", "created_at", "completed_at")
+    rows = db.execute("SELECT id,source,request,agent,model,mode,plan,status,feedback,correction,created_at,completed_at,desktop_before,desktop_after FROM task_runs ORDER BY id").fetchall()
+    keys = ("id", "source", "request", "agent", "model", "mode", "plan", "status", "feedback", "correction", "created_at", "completed_at", "desktop_before", "desktop_after")
     with path.open("x") as output:
         for row in rows:
             record = dict(zip(keys, row))
+            record["schema_version"] = 1
+            for field in ("desktop_before", "desktop_after"):
+                record[field] = json.loads(record[field] or "[]")
             record["plan"] = json.loads(record["plan"]) if record["plan"] else None
             record["steps"] = [{"action": json.loads(proposal), "status": status, "result": result} for proposal, status, result in db.execute("SELECT proposal,status,result FROM actions WHERE run_id=? ORDER BY id", (record["id"],))]
             output.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -686,6 +725,25 @@ def export_tasks(db: sqlite3.Connection, path: Path) -> int:
 def run_request(request: str, agent: str, db: sqlite3.Connection, *, plan: dict | None = None, session_id: int | None = None,
                 emit: Callable[[str, str], None] | None = None, approve: Callable[[str], bool] | None = None,
                 source: str = "cli") -> int:
+    private_dir(RUNTIME)
+    # Separate app windows and voice requests must not race over desktop targets.
+    with (RUNTIME / "task.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError("Omi is already handling a request. Wait for it to finish before retrying.") from exc
+        try:
+            return _run_request(request, agent, db, plan=plan, session_id=session_id, emit=emit, approve=approve, source=source)
+        except Exception:
+            set_state("error", agent, "Request stopped; see Activity or the request error")
+            raise
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def _run_request(request: str, agent: str, db: sqlite3.Connection, *, plan: dict | None = None, session_id: int | None = None,
+                 emit: Callable[[str, str], None] | None = None, approve: Callable[[str], bool] | None = None,
+                 source: str = "cli") -> int:
     def report(kind: str, message: str) -> None:
         if emit:
             emit(kind, message)
@@ -715,6 +773,10 @@ def run_request(request: str, agent: str, db: sqlite3.Connection, *, plan: dict 
         raise ValueError("Agent returned an invalid plan")
     db.execute("UPDATE task_runs SET mode=?,plan=?,status='running' WHERE id=?", (proposal["mode"], json.dumps(proposal, ensure_ascii=False), task_id))
     db.commit()
+    desktop_task = any(isinstance(action, dict) and action.get("type") in {"workspace_switch", "window_move", "window_place", "terminal_run", "open_app", "open_url", "browser_open"} for action in proposal["actions"])
+    if desktop_task:
+        db.execute("UPDATE task_runs SET desktop_before=? WHERE id=?", (json.dumps(hypr.available_windows()), task_id))
+        db.commit()
     for fact in save_auto_memories(db, request, proposal, task_id):
         report("memory", f"Remembered: {fact}")
     results: list[str] = []
@@ -722,6 +784,8 @@ def run_request(request: str, agent: str, db: sqlite3.Connection, *, plan: dict 
     last_opened: str | None = None
     for index, action in enumerate(proposal["actions"]):
         try:
+            if not isinstance(action, dict):
+                raise ValueError("Each action must be a structured object")
             if action.get("type") in {"window_place", "window_move"} and action.get("target") == "last_opened":
                 if last_opened is None:
                     raise ValueError("No unique newly opened window is available for placement")
@@ -787,6 +851,8 @@ def run_request(request: str, agent: str, db: sqlite3.Connection, *, plan: dict 
         if session_id is not None:
             db.execute("UPDATE sessions SET title=CASE WHEN title='New conversation' THEN ? ELSE title END,updated_at=? WHERE id=?", (request[:60], now(), session_id))
         db.commit()
+    if desktop_task:
+        db.execute("UPDATE task_runs SET desktop_after=? WHERE id=?", (json.dumps(hypr.available_windows()), task_id))
     status = "complete" if not outcomes or all(item == "executed" for item in outcomes) else ("cancelled" if all(item == "cancelled" for item in outcomes) else "partial")
     db.execute("UPDATE task_runs SET status=?,completed_at=? WHERE id=?", (status, now(), task_id))
     db.commit()

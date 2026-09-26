@@ -12,10 +12,11 @@ A personal desktop assistant for Omarchy Linux: describe what you want in text o
 - Separate Chromium profile for browser reading, clicks, and form input, plus accessible desktop controls via AT-SPI.
 - Voxtype transcript intake, push-to-talk and continuous mode, a bar indicator and movable recording card. Hardware testing remains required.
 - Spoken answers to questions via local Piper or a configured ElevenLabs voice. Action requests stay quiet.
-- Local action history with corrections. Only tasks reviewed as correct enter the candidate training export.
+- Persistent local reminders with quiet hours, retry handling, a review queue, and an app page.
+- Local action history with corrections and observed before/after desktop state. Only tasks reviewed as correct enter the candidate training export.
 - Outlook draft preparation and guarded web send adapter. Live account validation and durable mail/calendar sync are unfinished.
 
-Desktop plans stop at a failed or declined step. App/terminal launches are reported as requests; launching a terminal does not prove its command succeeded. General visual computer use, proactive notifications, and Outlook monitoring are under development.
+Desktop plans stop at a failed or declined step. App/terminal launches are reported as requests; launching a terminal does not prove its command succeeded. General visual computer use, notification triage beyond local reminders, and Outlook monitoring are under development.
 
 ## Setup
 
@@ -53,6 +54,12 @@ For a desktop workflow, try: “Go to workspace 3, open a terminal on the left a
 
 Use Settings to choose an available agent and model. Conversation threads provide bounded follow-up context; desktop commands go into Activity. Add project context under Knowledge, and edit background and tone under Profile.
 
+## Reminders
+
+Say or type “Remind me in 15 minutes to take a break.” This exact form uses no model call. The Reminders page also schedules and cancels local reminders. Settings can hold notifications during quiet hours. The background service catches up after restart and retries transient delivery failures; reminders still failing after five attempts remain visible as failed.
+
+Suggestions from future intake adapters remain proposed until reviewed. No email monitoring or automatic calendar writes are active. Delivery is durable but not exactly once: a crash after the notification daemon accepts a message and before SQLite records it can result in a retry. These reminders currently use desktop notifications, not spoken interruptions.
+
 ## Privacy and public source
 
 The repository contains code, generic examples, and synthetic tests. Personal data lives outside the checkout:
@@ -67,7 +74,7 @@ The repository contains code, generic examples, and synthetic tests. Personal da
 
 Local storage does not mean local inference: the selected agent receives the request and relevant context. ElevenLabs receives spoken text when selected. Exports can contain personal data; do not commit them. The repository ignore rules and [public-file check](scripts/check_public.py) help catch accidental additions, but are not a guarantee of redaction.
 
-Use Activity to mark a task correct or record a correction. Full history retains failures; reviewed training export excludes them. This produces a candidate dataset, not a trained local model.
+Use Activity to mark a task correct or record a correction. Full history retains failures; reviewed training export excludes them. Versioned exports now include observed window state before and after desktop tasks. This produces a candidate dataset, not a trained local model.
 
 ## Development
 

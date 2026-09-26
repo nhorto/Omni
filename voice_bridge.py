@@ -202,6 +202,16 @@ def handle_transcript(path: Path) -> None:
         print(f"Omi error: {exc}; transcript saved to {failed}", file=sys.stderr, flush=True)
 
 
+def reminder_worker(stop_event: threading.Event) -> None:
+    while not stop_event.is_set():
+        try:
+            with omi.database() as db:
+                omi.reminders.deliver_due(db, omi.settings())
+        except Exception as exc:
+            print(f"Reminder worker: {type(exc).__name__}", file=sys.stderr, flush=True)
+        stop_event.wait(1)
+
+
 def serve() -> None:
     global RUNNING
     prepare()
@@ -216,6 +226,8 @@ def serve() -> None:
         global RUNNING
         RUNNING = False
 
+    reminder_stop = threading.Event()
+    threading.Thread(target=reminder_worker, args=(reminder_stop,), daemon=True).start()
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
     while RUNNING:
@@ -243,6 +255,7 @@ def serve() -> None:
                 omi.set_state("error", detail=str(exc)[:120])
                 time.sleep(2)
         time.sleep(0.2)
+    reminder_stop.set()
     if vad_stop:
         vad_stop.set()
 

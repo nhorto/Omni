@@ -4,7 +4,7 @@ Status: working product specification, 2026-09-26. Repository: **Omni**. Assista
 
 ## Implementation status
 
-The installed build has a native GTK control app with conversation threads, memory, longer searchable knowledge notes, activity review/export, profile, and agent/model settings. `Super+H` opens it; `Super+Shift+H` records one Omi utterance; `Super+Alt+H` toggles continuous listening. The Omarchy bar and movable floating card show recording/work state. Voxtype transcription feeds the same request pipeline as typed text; simulated transcripts have opened the file manager. Piper speech is installed and a simulated question completed playback. Codex planning, bounded action approval, local memory, and task history work. Simple exact commands can run without an agent call. Omi can switch workspaces, move windows, position windows on a monitor, and open visible terminals to run approved commands; these operations passed live checks. Omi's separate Playwright browser has passed a live approved click; an AT-SPI adapter has activated an accessible Files control. Outlook draft and guarded send logic passed simulated tests. ElevenLabs voice ID/key configuration and TTS API adapter are implemented but need the user's voice/account for a live test. Claude is selectable when its CLI has available subscription access. Live microphone capture, Outlook sign-in/monitoring, calendar access, notification triage, and general visual computer use are pending.
+The installed build has a native GTK control app with conversation threads, memory, longer searchable knowledge notes, activity review/export, profile, and agent/model settings. `Super+H` opens it; `Super+Shift+H` records one Omi utterance; `Super+Alt+H` toggles continuous listening. The Omarchy bar and movable floating card show recording/work state. Voxtype transcription feeds the same request pipeline as typed text; simulated transcripts have opened the file manager. Piper speech is installed and a simulated question completed playback. Codex planning, bounded action approval, local memory, and task history work. Durable local reminders, quiet hours, notification retry/recovery, and an app reminder/review page are implemented. Simple exact commands can run without an agent call. Omi can switch workspaces, move windows, position windows on a monitor, and open visible terminals to run approved commands; these operations passed live checks. Omi's separate Playwright browser has passed a live approved click; an AT-SPI adapter has activated an accessible Files control. Outlook draft and guarded send logic passed simulated tests. ElevenLabs voice ID/key configuration and TTS API adapter are implemented but need the user's voice/account for a live test. Claude is selectable when its CLI has available subscription access. Live microphone capture, Outlook sign-in/monitoring, calendar access, notification triage, and general visual computer use are pending.
 
 ## Goal
 
@@ -52,11 +52,11 @@ The native app lets the user start a new conversation. Switching Codex and Claud
 
 1. **Profile and personality:** Human-editable Markdown for stable background, businesses, projects, communication preferences, and Omi's tone. These are bounded before injection into an agent call.
 2. **Facts and relationships:** Structured local records with content, source, creation/update time, and eventually entity links and validity. The current build has SQLite FTS5 search and allows automatic save only for verbatim, non-sensitive user-stated facts; it does not yet extract facts from mail or infer relationships. Longer user-added knowledge notes have their own full-text index, and only matching excerpts enter a request.
-3. **Episodes:** Immutable source events such as a task attempt, email, meeting, or notification with provenance and timestamp. Action task traces are implemented. Outlook/calendar intake is pending sign-in.
+3. **Episodes:** Immutable source events such as a task attempt, email, meeting, or notification with provenance and timestamp. Action task traces, including observed before/after window state, are implemented. Outlook/calendar intake is pending sign-in.
 4. **Procedures:** Reviewable reusable workflows or skill files learned from successful task traces. None should be silently generated and executed from an unreviewed failure.
 5. **Retrieval:** Use exact/FTS search and bounded summaries first. Add local embeddings and a vector index when realistic recall tests show misses; keep the underlying records readable and exportable. A vector index is a retrieval aid, not the source of truth.
 
-The assistant must preserve corrections and provenance. User feedback marks task traces `correct` or `incorrect`; an incorrect task remains in full history but is excluded from the training export. The current reviewed export is a dataset candidate, not a model training pipeline. Before fine-tuning, add privacy filtering, deduplication, schema versioning, outcome verification, and a held-out evaluation set.
+The assistant must preserve corrections and provenance. User feedback marks task traces `correct` or `incorrect`; an incorrect task remains in full history but is excluded from the training export. The current versioned reviewed export is a dataset candidate, not a model training pipeline. Before fine-tuning, add privacy filtering, deduplication, terminal exit-status verification, and a held-out evaluation set.
 
 ### Outlook, calendar, and notifications
 
@@ -154,6 +154,12 @@ The user can later tune rules, but a remembered approval never silently turns in
 6. In extended listening mode, multiple utterances execute in sequence and the stop control ends capture immediately.
 7. Export memories and delete one; subsequent recall must not return the deleted item.
 
+## Local proactive reminders
+
+The app and text/voice action path can schedule durable local reminders. Exact relative requests run without an agent call. A separate worker in the voice service checks due reminders even while the agent handles another request. Quiet hours delay delivery, notification failures retry with backoff up to five attempts, and interrupted delivery claims recover after restart. Proposed suggestions have source keys for intake deduplication and require review before delivery; actual Outlook intake remains deferred.
+
+Notification delivery is at least once around crashes: a daemon acceptance followed by a process crash before the database commit may produce a repeated notification. Reminders are local notifications, not calendar entries or spoken interruptions. General notification monitoring, urgency classification, and proactive briefings remain unfinished.
+
 ## Remaining delivery sequence
 
 1. Test real microphone capture and continuous listening, tune silence detection, and verify the recording indicator against actual hardware.
@@ -179,3 +185,5 @@ The user can later tune rules, but a remembered approval never silently turns in
 - [Hyprland's Lua dispatchers](https://wiki.hypr.land/Configuring/Basics/Dispatchers/) define workspace focus and exact window moves on this Omarchy version.
 - [ElevenLabs Voice Design](https://elevenlabs.io/docs/eleven-creative/voices/voice-design) creates a custom voice; [text to speech](https://elevenlabs.io/docs/api-reference/text-to-speech/convert) uses its voice ID for synthesis.
 - [Hermes memory](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory), [sessions](https://hermes-agent.nousresearch.com/docs/user-guide/sessions), and [skills](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/guides/work-with-skills.md) informed the separation between facts, episodic history, and procedures. Omi uses its own local broker and storage.
+
+- [Hyprland monitor coordinates](https://wiki.hypr.land/Configuring/Basics/Monitors/) use scaled and transformed resolution for placement.

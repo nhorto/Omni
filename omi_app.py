@@ -83,7 +83,7 @@ class OmiWindow(Gtk.ApplicationWindow):
         self.stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
         self.stack.set_hexpand(True)
         self.stack.set_vexpand(True)
-        for title, key in (("Conversation", "chat"), ("Memory", "memory"), ("Knowledge", "knowledge"), ("Activity", "activity"), ("Profile", "profile"), ("Settings", "settings")):
+        for title, key in (("Conversation", "chat"), ("Memory", "memory"), ("Knowledge", "knowledge"), ("Reminders", "reminders"), ("Activity", "activity"), ("Profile", "profile"), ("Settings", "settings")):
             button = Gtk.Button(label=title)
             button.add_css_class("flat")
             button.connect("clicked", lambda _button, chosen=key: self.show_page(chosen))
@@ -96,6 +96,7 @@ class OmiWindow(Gtk.ApplicationWindow):
         self.build_chat()
         self.build_memory()
         self.build_knowledge()
+        self.build_reminders()
         self.build_activity()
         self.build_profile()
         self.build_settings()
@@ -127,6 +128,8 @@ class OmiWindow(Gtk.ApplicationWindow):
             self.refresh_memory()
         elif page == "knowledge":
             self.refresh_knowledge()
+        elif page == "reminders":
+            self.refresh_reminders()
         elif page == "activity":
             self.refresh_activity()
         elif page == "settings":
@@ -606,6 +609,73 @@ class OmiWindow(Gtk.ApplicationWindow):
         dialog.connect("response", respond)
         dialog.present()
 
+    def build_reminders(self) -> None:
+        box = self.panel("Reminders", "Local reminders and suggestions. Notifications run while the Omi background service is active.")
+        row = Gtk.Box(spacing=8)
+        self.reminder_text = Gtk.Entry(hexpand=True)
+        self.reminder_text.set_placeholder_text("What should Omi remind you about?")
+        row.append(self.reminder_text)
+        self.reminder_minutes = Gtk.SpinButton.new_with_range(1, 525600, 1)
+        self.reminder_minutes.set_value(15)
+        row.append(self.reminder_minutes)
+        row.append(label("minutes"))
+        add = Gtk.Button(label="Add reminder")
+        add.connect("clicked", self.add_reminder)
+        row.append(add)
+        box.append(row)
+        self.reminder_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        box.append(scroll(self.reminder_list))
+        GLib.timeout_add_seconds(5, self.poll_reminders)
+
+    def poll_reminders(self) -> bool:
+        if self.stack.get_visible_child_name() == "reminders":
+            self.refresh_reminders()
+        return True
+
+    def add_reminder(self, _button: Gtk.Button) -> None:
+        try:
+            with omi.database() as db:
+                omi.reminders.add(db, self.reminder_text.get_text(), omi.time.time() + self.reminder_minutes.get_value_as_int() * 60)
+            self.reminder_text.set_text("")
+            self.refresh_reminders()
+            self.status_label.set_text("Reminder scheduled locally")
+        except ValueError as exc:
+            self.status_label.set_text(str(exc))
+
+    def change_reminder(self, ident: int, operation: str) -> None:
+        try:
+            with omi.database() as db:
+                if operation == "cancel":
+                    omi.reminders.cancel(db, ident)
+                else:
+                    omi.reminders.review(db, ident, operation == "accept")
+            self.refresh_reminders()
+        except ValueError as exc:
+            self.status_label.set_text(str(exc))
+
+    def refresh_reminders(self) -> None:
+        while child := self.reminder_list.get_first_child():
+            self.reminder_list.remove(child)
+        with omi.database() as db:
+            items = omi.reminders.list_items(db)
+        if not items:
+            self.reminder_list.append(label("No reminders yet. Try ‘Remind me in 15 minutes to take a break.’"))
+        for ident, content, due, status, source, error in items:
+            row = Gtk.Box(spacing=12)
+            row.set_margin_top(10)
+            row.set_margin_bottom(10)
+            info = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, hexpand=True)
+            info.append(label(content))
+            date = omi.datetime.fromtimestamp(due).astimezone().strftime("%Y-%m-%d %H:%M %Z")
+            info.append(label(f"{date} · {status} · {source}" + (f" · {error}" if error else ""), "muted"))
+            row.append(info)
+            controls = [("Accept", "accept"), ("Dismiss", "dismiss")] if status == "proposed" else [("Cancel", "cancel")] if status in {"scheduled", "failed"} else []
+            for title, operation in controls:
+                button = Gtk.Button(label=title)
+                button.connect("clicked", lambda _b, i=ident, op=operation: self.change_reminder(i, op))
+                row.append(button)
+            self.reminder_list.append(row)
+
     def build_profile(self) -> None:
         box = self.panel("Profile", "Tell Omi about your work, businesses, preferences, and response style. These notes are stored locally.")
         box.append(label("About you", "section-title"))
@@ -651,6 +721,14 @@ class OmiWindow(Gtk.ApplicationWindow):
         box.append(self.auto_memory)
         self.speech = Gtk.CheckButton(label="Speak conversational answers aloud")
         box.append(self.speech)
+        self.quiet_hours = Gtk.CheckButton(label="Hold reminder notifications during quiet hours")
+        box.append(self.quiet_hours)
+        self.quiet_start = Gtk.Entry()
+        self.quiet_start.set_placeholder_text("Quiet hours start, local time (22:00)")
+        box.append(self.quiet_start)
+        self.quiet_end = Gtk.Entry()
+        self.quiet_end.set_placeholder_text("Quiet hours end, local time (08:00)")
+        box.append(self.quiet_end)
         box.append(label("Speech voice", "section-title"))
         self.speech_provider = Gtk.DropDown.new_from_strings(["Local Piper", "ElevenLabs custom voice"])
         box.append(self.speech_provider)
@@ -677,6 +755,9 @@ class OmiWindow(Gtk.ApplicationWindow):
         self.claude_model.set_text(current.get("claude_model", "auto"))
         self.auto_memory.set_active(current.get("automatic_memory", True))
         self.speech.set_active(current.get("speech_enabled", True))
+        self.quiet_hours.set_active(current.get("quiet_hours_enabled", False))
+        self.quiet_start.set_text(current.get("quiet_hours_start", "22:00"))
+        self.quiet_end.set_text(current.get("quiet_hours_end", "08:00"))
         self.speech_provider.set_selected(0 if current.get("speech_provider", "piper") == "piper" else 1)
         self.elevenlabs_id.set_text(current.get("elevenlabs_voice_id", ""))
         self.agent_state.set_text(f"Codex: {omi.agent_status('codex')} · Claude: {omi.agent_status('claude')}")
@@ -692,6 +773,14 @@ class OmiWindow(Gtk.ApplicationWindow):
         current["claude_model"] = self.claude_model.get_text().strip() or "auto"
         current["automatic_memory"] = self.auto_memory.get_active()
         current["speech_enabled"] = self.speech.get_active()
+        current["quiet_hours_enabled"] = self.quiet_hours.get_active()
+        current["quiet_hours_start"] = self.quiet_start.get_text().strip()
+        current["quiet_hours_end"] = self.quiet_end.get_text().strip()
+        try:
+            omi.reminders.in_quiet_hours({**current, "quiet_hours_enabled": True}, omi.time.time())
+        except (ValueError, TypeError):
+            self.status_label.set_text("Enter quiet hours as HH:MM, for example 22:00 and 08:00")
+            return False
         current["speech_provider"] = "piper" if self.speech_provider.get_selected() == 0 else "elevenlabs"
         voice_id = self.elevenlabs_id.get_text().strip()
         if voice_id and not re.fullmatch(r"[A-Za-z0-9_-]{10,100}", voice_id):
@@ -754,7 +843,7 @@ class OmiApp(Gtk.Application):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--page", choices=["chat", "memory", "knowledge", "activity", "profile", "settings"], default="chat")
+    parser.add_argument("--page", choices=["chat", "memory", "knowledge", "reminders", "activity", "profile", "settings"], default="chat")
     parser.add_argument("--review", type=Path)
     args = parser.parse_args()
     app = OmiApp(args.page, args.review)

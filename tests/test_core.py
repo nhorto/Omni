@@ -119,6 +119,36 @@ class OmiCoreTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             hypr.workspace_number("11")
 
+    def test_long_knowledge_note_returns_matching_passage(self):
+        with assistant.database() as db:
+            timestamp = assistant.now()
+            body = 'Unrelated introduction. ' * 200 + 'Orion delivery is scheduled for the western warehouse.'
+            db.execute("INSERT INTO knowledge(title,body,source,created_at,updated_at) VALUES(?,?,?,?,?)", ('Project notes', body, 'synthetic', timestamp, timestamp))
+            db.commit()
+            self.assertIn('western warehouse', assistant.relevant_knowledge(db, 'Orion delivery')[0])
+
+    def test_relative_reminder_runs_locally_and_stays_out_of_conversation(self):
+        with assistant.database() as db, patch.object(assistant, 'plan_with_agent') as agent:
+            with contextlib.redirect_stdout(io.StringIO()):
+                assistant.run_request('Remind me in 15 minutes to take a break', 'codex', db)
+            agent.assert_not_called()
+            self.assertEqual(db.execute('SELECT content,status FROM reminders').fetchone(), ('take a break', 'scheduled'))
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM conversations').fetchone()[0], 0)
+
+    def test_training_export_preserves_observed_window_context(self):
+        before = [{'address': '0x1234', 'workspace': 1, 'title': 'Synthetic terminal'}]
+        after = [{'address': '0x1234', 'workspace': 3, 'title': 'Synthetic terminal'}]
+        with assistant.database() as db, patch.object(hypr, 'available_windows', side_effect=[before, after]), patch.object(hypr, 'switch_workspace', return_value='Switched'):
+            with contextlib.redirect_stdout(io.StringIO()):
+                assistant.run_request('Go to workspace 3', 'codex', db)
+            assistant.set_task_feedback(db, 1, 'correct')
+            output = Path(self.temp.name) / 'training.jsonl'
+            assistant.export_training(db, output)
+            payload = __import__('json').loads(output.read_text())
+            self.assertEqual(payload['schema_version'], 1)
+            self.assertEqual(payload['desktop_before'], before)
+            self.assertEqual(payload['desktop_after'], after)
+
     def test_window_placement_does_not_guess_after_ambiguous_launch(self):
         terminal = {"type": "terminal_run", "target": "", "destination": "", "content": "", "argv": ["printf", "hello"]}
         placement = {"type": "window_place", "target": "last_opened", "destination": "right", "content": "", "argv": []}
@@ -139,6 +169,25 @@ class OmiCoreTests(unittest.TestCase):
             place.assert_not_called()
             self.assertEqual([row[0] for row in db.execute("SELECT status FROM actions ORDER BY id")], ["cancelled"])
             self.assertEqual(db.execute("SELECT status FROM task_runs").fetchone()[0], "cancelled")
+
+    def test_concurrent_request_cannot_execute_while_approval_is_pending(self):
+        command = {"type": "run_command", "target": "", "destination": "", "content": "", "argv": ["printf", "test"]}
+        with assistant.database() as db, patch.object(assistant, "execute") as execute:
+            def approval(_description):
+                with self.assertRaisesRegex(RuntimeError, "already handling"):
+                    assistant.run_request("Second request", "codex", db, plan=plan("action", command))
+                return False
+            with contextlib.redirect_stdout(io.StringIO()):
+                assistant.run_request("First request", "codex", db, plan=plan("action", command), approve=approval)
+            execute.assert_not_called()
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM task_runs").fetchone()[0], 1)
+
+    def test_malformed_action_stops_the_plan_and_records_failure(self):
+        with assistant.database() as db, patch.object(assistant, "execute") as execute:
+            with contextlib.redirect_stdout(io.StringIO()):
+                assistant.run_request("Malformed plan", "codex", db, plan=plan("action", "invalid"))
+            execute.assert_not_called()
+            self.assertEqual(db.execute("SELECT status FROM actions").fetchone()[0], "failed")
 
     def test_training_export_requires_correct_feedback(self):
         with assistant.database() as db, patch.object(assistant, "speak_text"):
