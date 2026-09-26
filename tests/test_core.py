@@ -81,6 +81,18 @@ class OmiCoreTests(unittest.TestCase):
             self.assertEqual(db.execute("SELECT mode,status FROM task_runs").fetchone(), ("action", "complete"))
             self.assertEqual(db.execute("SELECT content FROM memory").fetchone()[0], "I prefer short replies")
 
+    def test_exact_url_and_folder_requests_avoid_agent_usage(self):
+        folder = Path(self.temp.name) / "test folder"
+        folder.mkdir()
+        (folder / "note.txt").write_text("hello")
+        with assistant.database() as db, patch.object(assistant, "plan_with_agent") as agent, patch.object(hypr, "available_windows", return_value=[]), patch.object(assistant.subprocess, "Popen") as launch, contextlib.redirect_stdout(io.StringIO()):
+            assistant.run_request("Open https://example.com", "codex", db)
+            assistant.run_request(f"List files in {folder}", "codex", db)
+            agent.assert_not_called()
+            launch.assert_called_once()
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM agent_calls").fetchone()[0], 0)
+            self.assertEqual([row[0] for row in db.execute("SELECT status FROM actions")], ["executed", "executed"])
+
     def test_conversation_threads_are_separate(self):
         with assistant.database() as db, patch.object(assistant, "speak_text"):
             first = assistant.new_session(db)

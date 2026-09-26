@@ -249,7 +249,13 @@ def selected_model(agent: str) -> str:
 
 def local_plan(request: str) -> dict | None:
     """Handle unambiguous commands without spending a subscription agent call."""
+    match = re.fullmatch(r"(?:please )?(?:open|go to|visit)\s+(https?://[^\s]+)", request.strip(), re.I)
+    if match:
+        return {"mode": "action", "reply": "", "actions": [{"type": "open_url", "target": match.group(1), "destination": "", "content": "", "argv": []}], "memories": []}
     plain = request.strip().rstrip(".!").strip()
+    match = re.fullmatch(r"(?:please )?(?:list|show)(?: me)? (?:the )?files in (/.+)", plain, re.I)
+    if match:
+        return {"mode": "action", "reply": "", "actions": [{"type": "list_files", "target": match.group(1), "destination": "", "content": "", "argv": []}], "memories": []}
     match = re.fullmatch(r"(?:please )?remind me in (\d+) (minute|minutes|hour|hours|day|days) to (.+)", plain, re.I | re.S)
     if match:
         count = int(match.group(1))
