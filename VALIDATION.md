@@ -24,7 +24,7 @@ A synthetic reminder was scheduled in the local database. The running background
 
 Automated cases cover restart catch-up, no repeated delivery after completion, active-claim exclusion, retry limits, cancellation, midnight-spanning quiet hours, source-event deduplication, and proposal review. Memory tests include retrieving a matching passage far into a long note. Training export tests verify before/after desktop state and exclusion of unreviewed or incorrect tasks.
 
-Synthetic voice checks now cover a planning failure reaching Activity, an approval window closed before execution, and a completed review releasing the bridge while the app remains open. Live microphone and interruption behavior still needs hardware validation.
+Synthetic voice checks cover a planning failure reaching Activity, an approval window closed before execution, and a completed review releasing the bridge while the app remains open. Live one-shot and continuous speech were exercised with a Yealink SP92 on 2026-09-26: Omi answered a time question and opened a Foot terminal. Long utterances, noisy conditions, microphone disconnection, and the revised indicator still need live validation.
 
 The installed Codex CLI was checked with a short read-only JSONL run. Its `turn.completed` event contained input, cached input, and output token counts. A synthetic parser/storage case verifies that Omi stores those counts without keeping the event text. The full Omi planner with JSONL accounting has not yet been exercised in a live request.
 

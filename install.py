@@ -20,9 +20,11 @@ def desktop_quote(value: str) -> str:
 
 def files(root: Path, home: Path) -> dict[Path, tuple[str, int]]:
     result = {}
-    for name, script in (("omi", "omi_app.py"), ("omi-voice", "voice_bridge.py")):
+    for name, script in (("omi", "omi_app.py"), ("omi-voice", "voice_bridge.py"), ("omi-dictate", "dictation_bridge.py")):
         result[home / '.local/bin' / name] = ('#!/bin/sh\nexec /usr/bin/python3 ' + shlex.quote(str(root / script)) + ' "$@"\n', 0o755)
-    entry = (root / 'integration/omi.desktop').read_text().replace('@OMI_LAUNCHER@', desktop_quote(str(home / '.local/bin/omi')))
+    entry = ((root / 'integration/omi.desktop').read_text()
+             .replace('@OMI_LAUNCHER@', desktop_quote(str(home / '.local/bin/omi')))
+             .replace('@OMI_ICON@', str(root / 'assets/omi-icon.png')))
     result[home / '.local/share/applications/omi.desktop'] = (entry, 0o644)
     result[home / '.config/systemd/user/omi-voice.service'] = ((root / 'integration/systemd-user/omi-voice.service').read_text(), 0o644)
     for source in (root / 'integration/omarchy-plugin').iterdir():

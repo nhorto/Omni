@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import threading
 from pathlib import Path
 
@@ -75,8 +76,18 @@ class OmiWindow(Gtk.ApplicationWindow):
         sidebar.set_margin_end(16)
         sidebar.add_css_class("sidebar")
         outer.append(sidebar)
-        sidebar.append(label("OMI", "brand"))
-        sidebar.append(label("Your desktop assistant", "muted"))
+        brand_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        icon_path = omi.ROOT / "assets/omi-icon.png"
+        if icon_path.exists():
+            icon = Gtk.Picture.new_for_filename(str(icon_path))
+            icon.set_content_fit(Gtk.ContentFit.CONTAIN)
+            icon.set_size_request(52, 52)
+            brand_row.append(icon)
+        brand_words = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        brand_words.append(label("OMI", "brand"))
+        brand_words.append(label("Personal desktop assistant", "muted"))
+        brand_row.append(brand_words)
+        sidebar.append(brand_row)
         spacer = Gtk.Box()
         spacer.set_size_request(-1, 14)
         sidebar.append(spacer)
@@ -91,6 +102,8 @@ class OmiWindow(Gtk.ApplicationWindow):
             sidebar.append(button)
         sidebar.append(Gtk.Box(vexpand=True))
         self.status_label = label("Ready", "muted")
+        sidebar.append(label("SUPER + SHIFT + H  ·  TALK", "shortcut-hint"))
+        sidebar.append(label("SUPER + CTRL + X  ·  DICTATE", "shortcut-hint"))
         sidebar.append(self.status_label)
         outer.append(self.stack)
 
@@ -139,6 +152,20 @@ class OmiWindow(Gtk.ApplicationWindow):
 
     def build_chat(self) -> None:
         box = self.panel("Conversation", "Ask a question or give Omi an action. Commands go into Activity; questions stay in this thread.")
+        voice_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        voice_card.add_css_class("voice-card")
+        voice_card.append(label("Speak to Omi", "section-title"))
+        voice_card.append(label("Omi runs a spoken request as soon as you finish. Dictation types into the focused app instead.", "muted"))
+        voice_buttons = Gtk.Box(spacing=8)
+        voice_card.append(voice_buttons)
+        self.talk_button = Gtk.Button(label="●  Talk to Omi")
+        self.talk_button.add_css_class("suggested-action")
+        self.talk_button.connect("clicked", lambda *_: self.voice_command("toggle"))
+        voice_buttons.append(self.talk_button)
+        self.continuous_button = Gtk.Button(label="Continuous listening")
+        self.continuous_button.connect("clicked", lambda *_: self.voice_command("continuous", "toggle"))
+        voice_buttons.append(self.continuous_button)
+        box.append(voice_card)
         row = Gtk.Box(spacing=12)
         row.set_vexpand(True)
         box.append(row)
@@ -168,11 +195,19 @@ class OmiWindow(Gtk.ApplicationWindow):
         self.send_button.add_css_class("suggested-action")
         self.send_button.connect("clicked", self.send_request)
         composer.append(self.send_button)
+        middle.append(label("Typed messages use Send. Voice requests run automatically.", "muted"))
         self.refresh_sessions()
         if self.session_id is None:
             self.create_session(None)
         else:
             self.load_session()
+
+    def voice_command(self, *args: str) -> None:
+        try:
+            subprocess.run(["/usr/bin/python3", str(omi.ROOT / "voice_bridge.py"), *args], check=True, timeout=5, capture_output=True, text=True)
+            self.status_label.set_text("Voice control updated; speak and finish when ready")
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            self.status_label.set_text(f"Voice control failed: {exc}")
 
     def refresh_sessions(self) -> None:
         self.rebuilding_sessions = True
@@ -731,8 +766,11 @@ class OmiWindow(Gtk.ApplicationWindow):
         self.agent_state = label("", "muted")
         box.append(self.agent_state)
         box.append(label("Codex model", "section-title"))
+        self.codex_model_choice = Gtk.DropDown.new_from_strings(["Auto · efficient default", "GPT-6 Luna", "GPT-6 Sol", "GPT-6 Astra", "Custom model ID"])
+        box.append(self.codex_model_choice)
         self.codex_model = Gtk.Entry()
-        self.codex_model.set_placeholder_text("auto uses gpt-6-sol; enter another model to override")
+        self.codex_model.set_placeholder_text("Exact Codex model ID")
+        self.codex_model_choice.connect("notify::selected", lambda *_: self.codex_model.set_sensitive(self.codex_model_choice.get_selected() == 4))
         box.append(self.codex_model)
         box.append(label("Claude model", "section-title"))
         self.claude_model = Gtk.Entry()
@@ -784,7 +822,11 @@ class OmiWindow(Gtk.ApplicationWindow):
     def refresh_settings(self) -> None:
         current = omi.settings()
         self.agent_drop.set_selected(0 if current.get("agent", "codex") == "codex" else 1)
-        self.codex_model.set_text(current.get("codex_model", "auto"))
+        codex_choice = current.get("codex_model", "auto")
+        presets = {"auto": 0, "gpt-6-luna": 1, "gpt-6-sol": 2, "gpt-6-astra": 3}
+        self.codex_model_choice.set_selected(presets.get(codex_choice, 4))
+        self.codex_model.set_text("" if codex_choice in presets else codex_choice)
+        self.codex_model.set_sensitive(self.codex_model_choice.get_selected() == 4)
         self.claude_model.set_text(current.get("claude_model", "auto"))
         self.auto_memory.set_active(current.get("automatic_memory", True))
         self.speech.set_active(current.get("speech_enabled", True))
@@ -802,7 +844,11 @@ class OmiWindow(Gtk.ApplicationWindow):
             self.status_label.set_text(f"{chosen_agent.capitalize()} needs CLI login before Omi can use it")
             return False
         current["agent"] = chosen_agent
-        current["codex_model"] = self.codex_model.get_text().strip() or "auto"
+        selected = self.codex_model_choice.get_selected()
+        current["codex_model"] = ["auto", "gpt-6-luna", "gpt-6-sol", "gpt-6-astra"][selected] if selected < 4 else self.codex_model.get_text().strip()
+        if not current["codex_model"]:
+            self.status_label.set_text("Enter a Codex model ID or choose Auto")
+            return False
         current["claude_model"] = self.claude_model.get_text().strip() or "auto"
         current["automatic_memory"] = self.auto_memory.get_active()
         current["speech_enabled"] = self.speech.get_active()
@@ -861,13 +907,19 @@ class OmiApp(Gtk.Application):
         if self.window is None:
             css = Gtk.CssProvider()
             css.load_from_data(b"""
-                window { background: #10151d; color: #e9eef4; }
-                .sidebar { border-right: 1px solid #293241; }
-                .brand { font-size: 29px; font-weight: 800; color: #86d8ca; }
-                .page-title { font-size: 24px; font-weight: 700; }
-                .section-title { font-size: 16px; font-weight: 700; }
-                .muted { color: #a6b2bf; }
-                textview, entry, listbox { background: #19212c; color: #e9eef4; border-radius: 8px; }
+                window { background: #0c1021; color: #eef3ff; }
+                .sidebar { background: #121a32; border-right: 1px solid #27385d; border-radius: 18px; padding: 12px; }
+                .brand { font-size: 27px; font-weight: 800; letter-spacing: 2px; color: #dbeaff; }
+                .page-title { font-size: 28px; font-weight: 750; color: #f1f5ff; }
+                .section-title { font-size: 16px; font-weight: 700; color: #c6d8ff; }
+                .muted { color: #a9b8d1; }
+                .shortcut-hint { color: #86a8df; font-size: 10px; letter-spacing: 1px; }
+                .voice-card { background: #18264b; border: 1px solid #4b6da4; border-radius: 15px; padding: 16px; }
+                textview, entry, listbox, dropdown { background: #18233d; color: #edf4ff; border: 1px solid #30476f; border-radius: 10px; }
+                button { border-radius: 9px; padding: 8px 12px; }
+                button:hover { background: #263b65; }
+                button.suggested-action { background: #4968bd; color: #ffffff; }
+                button.suggested-action:hover { background: #6284dd; }
             """)
             Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
             self.window = OmiWindow(self, self.page, self.review)

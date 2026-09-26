@@ -93,6 +93,41 @@ class OmiCoreTests(unittest.TestCase):
             self.assertEqual(db.execute("SELECT COUNT(*) FROM agent_calls").fetchone()[0], 0)
             self.assertEqual([row[0] for row in db.execute("SELECT status FROM actions")], ["executed", "executed"])
 
+    def test_common_voice_requests_skip_agent(self):
+        self.assertEqual(assistant.local_plan("What time is it right now?")["mode"], "conversation")
+        with patch.object(assistant, "installed_apps", return_value={"foot.desktop": "foot"}):
+            self.assertEqual(assistant.local_plan("Open a terminal for me, please.")["actions"][0]["target"], "foot.desktop")
+
+    def test_harmless_terminal_commands_run_without_review(self):
+        exercise = Path(self.temp.name) / "exercise.md"
+        exercise.write_text("step 1\nstep 2\n")
+        self.assertFalse(assistant.needs_approval({"type": "terminal_run", "argv": ["pwd"]}))
+        self.assertFalse(assistant.needs_approval({"type": "terminal_run", "argv": ["cat", str(exercise)]}))
+        self.assertFalse(assistant.needs_approval({"type": "terminal_run", "argv": ["sed", "-n", "1,2p", str(exercise)]}))
+        self.assertFalse(assistant.needs_approval({"type": "terminal_run", "argv": ["tmux", "new-session", "-c", self.temp.name]}))
+        self.assertTrue(assistant.needs_approval({"type": "terminal_run", "argv": ["rm", "-rf", self.temp.name]}))
+        self.assertTrue(assistant.needs_approval({"type": "move_file"}))
+        self.assertFalse(assistant.needs_approval({"type": "window_move"}))
+
+    def test_omi_shortcut_does_not_stop_text_dictation(self):
+        state = Path(self.temp.name) / "voxtype-state"
+        state.write_text("recording")
+        with patch.object(voice_bridge, "VOICE_STATE", state), patch.object(voice_bridge, "CONTINUOUS", Path(self.temp.name) / "continuous"), patch.object(voice_bridge, "run_voxtype") as record:
+            with self.assertRaisesRegex(RuntimeError, "Dictation is recording"):
+                voice_bridge.toggle_utterance()
+            record.assert_not_called()
+
+    def test_stopping_omi_keeps_the_last_recording_for_transcription(self):
+        state = Path(self.temp.name) / "voxtype-state"
+        state.write_text("recording")
+        marker = assistant.RUNTIME / "omi-recording"
+        marker.parent.mkdir(parents=True)
+        marker.write_text("omi\n")
+        with patch.object(voice_bridge, "VOICE_STATE", state), patch.object(voice_bridge, "CONTINUOUS", Path(self.temp.name) / "continuous"), patch.object(voice_bridge, "run_voxtype") as record, patch.object(assistant, "set_state"):
+            voice_bridge.stop_listening()
+        record.assert_called_once_with("stop")
+        self.assertFalse(marker.exists())
+
     def test_codex_json_usage_is_stored_without_event_text(self):
         events = '\n'.join((
             '{"type":"item.completed","item":{"text":"private output"}}',

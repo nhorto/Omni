@@ -11,8 +11,11 @@ BarWidget {
   property string assistantDetail: ""
   property string selectedAgent: "codex"
   property string voiceState: "idle"
+  property bool omiRecording: false
+  property bool continuous: false
   readonly property string displayedState: voiceState === "recording" || voiceState === "transcribing"
-    ? voiceState : assistantState
+    ? (omiRecording || continuous ? "Omi " + voiceState : "Dictation " + voiceState)
+    : (continuous ? "Omi listening" : assistantState)
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -39,6 +42,26 @@ BarWidget {
   }
 
   FileView {
+    id: omiModeFile
+    path: (Quickshell.env("XDG_RUNTIME_DIR") || "") + "/omi/omi-recording"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.omiRecording = text().trim() === "omi"
+    onLoadFailed: root.omiRecording = false
+  }
+
+  FileView {
+    id: continuousFile
+    path: (Quickshell.env("XDG_RUNTIME_DIR") || "") + "/omi/continuous"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.continuous = text().trim() === "on"
+    onLoadFailed: root.continuous = false
+  }
+
+  FileView {
     id: voiceFile
     path: (Quickshell.env("XDG_RUNTIME_DIR") || "") + "/voxtype/state"
     watchChanges: true
@@ -54,6 +77,8 @@ BarWidget {
     onTriggered: {
       statusFile.reload()
       voiceFile.reload()
+      omiModeFile.reload()
+      continuousFile.reload()
     }
   }
 
@@ -61,15 +86,22 @@ BarWidget {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: root.vertical ? "O" : (root.displayedState === "idle" ? "Omi · " + root.selectedAgent : "Omi · " + root.displayedState)
+    text: root.vertical ? "O" : (root.displayedState === "idle" ? "Omi · " + root.selectedAgent : root.displayedState)
     active: root.displayedState !== "idle"
     horizontalMargin: 8
-    tooltipText: (root.assistantDetail || ("Omi: " + root.displayedState)) + "\nClick: Omi app · Right-click: settings"
+    tooltipText: root.displayedState + "\nClick: talk to Omi / finish · Middle-click: Omi app · Right-click: settings"
     onPressed: function(buttonCode) {
       if (!root.bar) return
       if (buttonCode === Qt.RightButton)
         Quickshell.execDetached([Quickshell.env("HOME") + "/.local/bin/omi", "--page", "settings"])
-      else Quickshell.execDetached([Quickshell.env("HOME") + "/.local/bin/omi"])
+      else if (buttonCode === Qt.MiddleButton)
+        Quickshell.execDetached([Quickshell.env("HOME") + "/.local/bin/omi"])
+      else if (root.continuous)
+        Quickshell.execDetached([Quickshell.env("HOME") + "/.local/bin/omi-voice", "continuous", "off"])
+      else if (root.voiceState === "recording" && !root.omiRecording)
+        Quickshell.execDetached(["voxtype", "record", "stop"])
+      else
+        Quickshell.execDetached([Quickshell.env("HOME") + "/.local/bin/omi-voice", "toggle"])
     }
   }
 }

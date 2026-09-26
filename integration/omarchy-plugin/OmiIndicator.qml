@@ -9,9 +9,13 @@ Item {
   property string assistantState: "idle"
   property string assistantDetail: ""
   property string voiceState: "idle"
-  readonly property string displayedState: voiceState === "recording" || voiceState === "transcribing"
-    ? voiceState : assistantState
-  readonly property bool shouldShow: displayedState === "recording" || displayedState === "transcribing"
+  property bool omiRecording: false
+  property bool continuous: false
+  readonly property bool micActive: voiceState === "recording" || voiceState === "transcribing"
+  readonly property string displayedState: micActive
+    ? (omiRecording || continuous ? "Omi " + voiceState : "Dictation " + voiceState)
+    : (continuous ? "Omi listening" : assistantState)
+  readonly property bool shouldShow: micActive || continuous
     || displayedState === "thinking" || displayedState === "working" || displayedState === "awaiting approval"
 
   function readStatus(raw) {
@@ -35,6 +39,26 @@ Item {
   }
 
   FileView {
+    id: omiModeFile
+    path: (Quickshell.env("XDG_RUNTIME_DIR") || "") + "/omi/omi-recording"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.omiRecording = text().trim() === "omi"
+    onLoadFailed: root.omiRecording = false
+  }
+
+  FileView {
+    id: continuousFile
+    path: (Quickshell.env("XDG_RUNTIME_DIR") || "") + "/omi/continuous"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.continuous = text().trim() === "on"
+    onLoadFailed: root.continuous = false
+  }
+
+  FileView {
     id: voiceFile
     path: (Quickshell.env("XDG_RUNTIME_DIR") || "") + "/voxtype/state"
     watchChanges: true
@@ -50,6 +74,8 @@ Item {
     onTriggered: {
       statusFile.reload()
       voiceFile.reload()
+      omiModeFile.reload()
+      continuousFile.reload()
     }
   }
 
@@ -72,7 +98,7 @@ Item {
       height: 58
       radius: 14
       color: Color.popups.background
-      border.color: root.displayedState === "recording" ? Color.urgent : Color.popups.border
+      border.color: root.micActive ? Color.urgent : Color.popups.border
       border.width: 2
 
       MouseArea {
@@ -91,7 +117,7 @@ Item {
         width: 10
         height: 10
         radius: 5
-        color: root.displayedState === "recording" ? Color.urgent : Color.accent
+        color: root.micActive ? Color.urgent : Color.accent
       }
 
       Column {
@@ -101,7 +127,7 @@ Item {
         spacing: 1
 
         Text {
-          text: "Omi · " + root.displayedState
+          text: root.displayedState
           color: Color.popups.text
           font.family: Style.font.family
           font.bold: true
@@ -110,7 +136,7 @@ Item {
 
         Text {
           width: parent.width
-          text: root.displayedState === "recording" ? "Microphone active" : root.assistantDetail
+          text: root.micActive ? (root.omiRecording || root.continuous ? "Sending speech to Omi" : "Typing into the focused app") : root.assistantDetail
           elide: Text.ElideRight
           color: Color.popups.text
           opacity: 0.65
@@ -121,7 +147,7 @@ Item {
 
       Rectangle {
         id: stopButton
-        visible: root.displayedState === "recording"
+        visible: root.voiceState === "recording" || root.continuous
         width: 56
         height: 30
         radius: 8
@@ -142,7 +168,14 @@ Item {
         MouseArea {
           anchors.fill: parent
           cursorShape: Qt.PointingHandCursor
-          onClicked: Quickshell.execDetached([Quickshell.env("HOME") + "/.local/bin/omi-voice", "stop"])
+          onClicked: {
+            if (root.continuous)
+              Quickshell.execDetached([Quickshell.env("HOME") + "/.local/bin/omi-voice", "continuous", "off"])
+            else if (root.omiRecording)
+              Quickshell.execDetached([Quickshell.env("HOME") + "/.local/bin/omi-voice", "toggle"])
+            else
+              Quickshell.execDetached(["voxtype", "record", "stop"])
+          }
         }
       }
     }

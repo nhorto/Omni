@@ -254,10 +254,12 @@ def selected_model(agent: str) -> str:
 
 def local_plan(request: str) -> dict | None:
     """Handle unambiguous commands without spending a subscription agent call."""
+    plain = request.strip().rstrip(".?!").strip()
+    if re.fullmatch(r"(?:please )?(?:what(?:'s| is) the time|what time is it)(?: right now| now)?", plain, re.I):
+        return {"mode": "conversation", "reply": f"It’s {datetime.now().astimezone().strftime('%-I:%M %p %Z')}.", "actions": [], "memories": []}
     match = re.fullmatch(r"(?:please )?(?:open|go to|visit)\s+(https?://[^\s]+)", request.strip(), re.I)
     if match:
         return {"mode": "action", "reply": "", "actions": [{"type": "open_url", "target": match.group(1), "destination": "", "content": "", "argv": []}], "memories": []}
-    plain = request.strip().rstrip(".!").strip()
     match = re.fullmatch(r"(?:please )?(?:list|show)(?: me)? (?:the )?files in (/.+)", plain, re.I)
     if match:
         return {"mode": "action", "reply": "", "actions": [{"type": "list_files", "target": match.group(1), "destination": "", "content": "", "argv": []}], "memories": []}
@@ -275,7 +277,7 @@ def local_plan(request: str) -> dict | None:
         content = match.group(1).strip()
         if content:
             return {"mode": "action", "reply": "", "actions": [{"type": "remember", "target": "", "destination": "", "content": content, "argv": []}], "memories": []}
-    match = re.fullmatch(r"(?:please )?(?:open|launch)\s+(?:the )?(file manager|files|terminal)" , plain, re.I)
+    match = re.fullmatch(r"(?:please )?(?:open|launch)\s+(?:a |the )?(file manager|files|terminal)(?: for me)?(?:,? please)?" , plain, re.I)
     if match:
         wanted = "Files" if match.group(1).lower() in {"file manager", "files"} else "foot"
         matches = [ident for ident, label in installed_apps().items() if label.casefold() == wanted.casefold()]
@@ -325,7 +327,7 @@ For open_app, target must be an EXACT .desktop ID from this installed app catalo
 Do not guess an app ID and do not put a shell command there.
 For open_url, target is an http/https URL. For file actions, use absolute paths in target and destination.
 For run_command, argv is an array of exact command arguments, never a shell string.
-For terminal_run, argv is the exact command and arguments to run in a new visible Foot terminal. destination may be an absolute working directory or empty. It requires approval and the terminal holds open after the command exits. Its exit result arrives asynchronously; do not plan a later action that depends on its success. Use this when the user specifically wants a terminal or visible command output.
+For terminal_run, argv is the exact command and arguments to run in a new visible Foot terminal. destination may be an absolute working directory or empty. Harmless commands may run directly; other commands require approval. The terminal holds open after the command exits. Its exit result arrives asynchronously; do not plan a later action that depends on its success. Use this when the user specifically wants a terminal or visible command output.
 Current local time: {datetime.now().astimezone().isoformat()}.
 For reminder_add, target is an ISO 8601 date/time with an explicit timezone offset, content is the reminder text. Use only a time requested by the user, in the future within one year. This schedules a local desktop notification, not a calendar entry. For reminder_list, target is empty. For reminder_cancel, target is the numeric reminder ID explicitly selected by the user; never guess an ID. If you need IDs first, list reminders and ask for a follow-up.
 For remember, content is a fact the user explicitly asked to save. Never infer a sensitive fact.
@@ -336,7 +338,7 @@ For browser_read, target is empty; it reads the current Omi browser page. For br
 For browser_click, target must be only the exact visible control label or element ref from the current snapshot, with no explanation appended. Clicking requires user approval. For browser_fill, target must be only an element ref from the current snapshot and content is the exact text to enter; it requires approval and does not submit.
 For desktop_read, target is an exact accessible app name from this list: {json.dumps(desktop.apps())}. It lists clickable controls and named editable fields. For desktop_click, target is that app name and content is the exact accessible control label; clicking requires approval. For desktop_fill, target is the app name, destination is the exact named editable field from desktop_read, and content is the complete replacement text; it requires approval. If unsure of a label, propose desktop_read and ask for a follow-up.
 For screen_read, use empty target/destination/content. It performs local OCR on the current visible desktop, then supplies the extracted text for an answer. It cannot identify reliable click coordinates or describe purely visual content. Do not infer an action target from OCR alone.
-For workspace_switch, target is a workspace number 1-10. For window_move, target is an exact window address from this current window list or "last_opened" after a launch, and destination is workspace number 1-10: {json.dumps(window_context, ensure_ascii=False)}. Moving a window requires approval. To open an app on a requested workspace, first propose workspace_switch, then open_app.
+For workspace_switch, target is a workspace number 1-10. For window_move, target is an exact window address from this current window list or "last_opened" after a launch, and destination is workspace number 1-10: {json.dumps(window_context, ensure_ascii=False)}. To open an app on a requested workspace, first propose workspace_switch, then open_app.
 For window_place, target is an exact window address from the current window list or "last_opened" immediately after open_app, browser_open, or terminal_run. destination is one of "left", "right", "top", "bottom", "center", "top-left", "top-right", "bottom-left", "bottom-right". It floats and sizes the window to that part of its current monitor. If the newly opened window cannot be identified uniquely, the action fails safely. To put a new terminal on the right, propose terminal_run then window_place with target "last_opened" and destination "right".
 For window_focus, target is an exact address from the current window list or "last_opened" after a launch. It brings an existing window into focus and verifies the active window. Do not guess a window address from its title if several windows match.
 For window_shortcut, target is an exact window address or "last_opened", content is one of these navigation shortcuts: {', '.join(sorted(hypr.NAVIGATION_SHORTCUTS))}. It requires approval. Hyprland confirms dispatch, but the app effect cannot yet be verified; do not use it for submitting forms or sending messages.
@@ -661,7 +663,21 @@ def validate_action(action: dict) -> None:
 
 
 def needs_approval(action: dict) -> bool:
-    return action["type"] in {"copy_file", "move_file", "trash_file", "run_command", "terminal_run", "browser_click", "browser_fill", "desktop_click", "desktop_fill", "email_send", "window_move", "window_shortcut"}
+    kind = action["type"]
+    if kind in {"run_command", "terminal_run"}:
+        argv = action.get("argv") or []
+        if argv == ["pwd"]:
+            return False
+        if argv and argv[0] == "ls" and all(not arg.startswith("-") or re.fullmatch(r"-[alh1]+", arg) for arg in argv[1:]):
+            return False
+        if len(argv) >= 2 and argv[0] == "cat" and all(not arg.startswith("-") and Path(arg).is_file() for arg in argv[1:]):
+            return False
+        if len(argv) == 4 and argv[:2] == ["sed", "-n"] and re.fullmatch(r"\d+(?:,\d+)?p", argv[2]) and Path(argv[3]).is_file():
+            return False
+        if len(argv) == 4 and argv[:3] == ["tmux", "new-session", "-c"] and Path(argv[3]).is_absolute() and Path(argv[3]).is_dir():
+            return False
+        return True
+    return kind in {"copy_file", "move_file", "trash_file", "browser_click", "browser_fill", "desktop_click", "desktop_fill", "email_send", "window_shortcut"}
 
 
 def describe(action: dict) -> str:

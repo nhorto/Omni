@@ -8,9 +8,9 @@ A personal desktop assistant for Omarchy Linux: describe what you want in text o
 
 - Native GTK app with conversations, editable local memory, searchable knowledge notes, activity review, and settings.
 - Codex or Claude CLI adapters using their existing sign-in. Exact reminders, memories, workspace changes, URLs, and folder listings can run locally without an agent call; model overrides are available. Activity shows Codex token usage when its CLI reports it.
-- Workspace switching, exact existing-window focus, approved navigation shortcuts, window moves and placement, app/site launches, and visible terminals with approved commands.
+- Workspace switching, exact existing-window focus, approved navigation shortcuts, window moves and placement, app/site launches, and visible terminals. A small set of harmless terminal commands runs directly; other commands require review.
 - Separate Chromium profile for browser reading, clicks, and form input, plus accessible desktop controls and named text fields via AT-SPI. Local screen OCR can read visible text; it does not store the captured image or raw OCR in Activity.
-- Voxtype transcript intake, push-to-talk and continuous mode, a bar indicator and movable recording card. Reviewed voice requests release the bridge after the task finishes, even when the app stays open. Hardware testing remains required.
+- Voxtype transcript intake, push-to-talk and continuous mode, a bar indicator and movable recording card. The indicator distinguishes Omi listening from text dictation. The Yealink SP92 was tested live on this development machine; other microphone setups still need validation.
 - Spoken answers to questions via local Piper or a configured ElevenLabs voice. Action requests stay quiet.
 - Persistent local reminders with quiet hours, retry handling, a review queue, and an app page.
 - Local action history with corrections, planning errors, cancelled voice reviews, terminal outcomes, and observed before/after desktop state. Only tasks reviewed as correct enter the candidate training export.
@@ -37,7 +37,9 @@ python3 install.py --apply
 
 The installer backs up replaced integration files. It does not install packages or change shortcuts. Follow [integration setup](integration/README.md) to enable the service and recording indicators. Keep the checkout in place; installed launchers refer to it.
 
-Suggested shortcuts are **Super+H** for the app, **Super+Shift+H** for one voice utterance, and **Super+Alt+H** for continuous listening. Check existing bindings before assigning them.
+Suggested shortcuts are **Super+H** for the app, **Super+Shift+H** for one voice utterance, and **Super+Alt+H** for continuous listening. On Omarchy, **Super+Ctrl+X** is Voxtype dictation into the focused text field. Dictation does not send a request to Omi. The bar label and floating card distinguish the two recording modes; click the bar item to start or finish a voice request. Check existing bindings before assigning them.
+
+Omi sends a spoken request automatically when recording finishes. Typed requests in the app use Send. Harmless desktop actions do not require confirmation; consequential actions open a review window. Settings offers automatic model choice or an explicit Codex model. Automatic choice currently uses GPT-6 Sol for requests needing an agent; exact local commands bypass the agent.
 
 ## Try it without a microphone
 
@@ -51,7 +53,7 @@ python3 assistant.py ask "Remember that I prefer concise replies"
 python3 assistant.py doctor
 ```
 
-For a desktop workflow, try: “Go to workspace 3, open a terminal on the left and run pwd, then open another terminal on the right and run date.” Each terminal command requires approval. New-window placement stops if the target cannot be identified uniquely.
+For a desktop workflow, try: “Go to workspace 3, open a terminal on the left and run pwd, then open another terminal on the right and run date.” Commands outside the small read-only allowlist require approval. New-window placement stops if the target cannot be identified uniquely.
 
 Use Settings to check setup and choose an available agent and model. Conversation threads provide bounded follow-up context; desktop commands go into Activity. Add project context under Knowledge, and edit background and tone under Profile.
 
