@@ -33,13 +33,14 @@ import desktop
 import hypr
 import mail
 import reminders
+import screen
 
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get("OMI_DATA", Path.home() / ".local/share/omi"))
 CONFIG = Path(os.environ.get("OMI_CONFIG", Path.home() / ".config/omi"))
 RUNTIME = Path(os.environ.get("OMI_RUNTIME", Path(os.environ.get("XDG_RUNTIME_DIR", str(Path.home() / ".cache"))) / "omi"))
 SCHEMA = ROOT / "plan.schema.json"
-KINDS = {"open_app", "open_url", "list_files", "copy_file", "move_file", "trash_file", "run_command", "terminal_run", "remember", "recall", "browser_open", "browser_read", "browser_click", "browser_fill", "browser_back", "desktop_read", "desktop_click", "desktop_fill", "email_prepare", "email_send", "email_inbox", "workspace_switch", "window_move", "window_place", "window_focus", "window_shortcut", "reminder_add", "reminder_list", "reminder_cancel"}
+KINDS = {"open_app", "open_url", "list_files", "copy_file", "move_file", "trash_file", "run_command", "terminal_run", "remember", "recall", "browser_open", "browser_read", "browser_click", "browser_fill", "browser_back", "desktop_read", "desktop_click", "desktop_fill", "screen_read", "email_prepare", "email_send", "email_inbox", "workspace_switch", "window_move", "window_place", "window_focus", "window_shortcut", "reminder_add", "reminder_list", "reminder_cancel"}
 APP_DIRS = [Path.home() / ".local/share/applications", Path("/usr/share/applications")]
 VOICE_CATALOG = {
     "ryan": ("en/en_US/ryan/medium", "en_US-ryan-medium", "abf4c274862564ed647ba0d2c47f8ee7c9b717d27bdad9219100eb310db4047a"),
@@ -334,6 +335,7 @@ For browser_open, target is an http/https URL in Omi's separate visible Chromium
 For browser_read, target is empty; it reads the current Omi browser page. For browser_back, target is empty.
 For browser_click, target must be only the exact visible control label or element ref from the current snapshot, with no explanation appended. Clicking requires user approval. For browser_fill, target must be only an element ref from the current snapshot and content is the exact text to enter; it requires approval and does not submit.
 For desktop_read, target is an exact accessible app name from this list: {json.dumps(desktop.apps())}. It lists clickable controls and named editable fields. For desktop_click, target is that app name and content is the exact accessible control label; clicking requires approval. For desktop_fill, target is the app name, destination is the exact named editable field from desktop_read, and content is the complete replacement text; it requires approval. If unsure of a label, propose desktop_read and ask for a follow-up.
+For screen_read, use empty target/destination/content. It performs local OCR on the current visible desktop, then supplies the extracted text for an answer. It cannot identify reliable click coordinates or describe purely visual content. Do not infer an action target from OCR alone.
 For workspace_switch, target is a workspace number 1-10. For window_move, target is an exact window address from this current window list or "last_opened" after a launch, and destination is workspace number 1-10: {json.dumps(window_context, ensure_ascii=False)}. Moving a window requires approval. To open an app on a requested workspace, first propose workspace_switch, then open_app.
 For window_place, target is an exact window address from the current window list or "last_opened" immediately after open_app, browser_open, or terminal_run. destination is one of "left", "right", "top", "bottom", "center", "top-left", "top-right", "bottom-left", "bottom-right". It floats and sizes the window to that part of its current monitor. If the newly opened window cannot be identified uniquely, the action fails safely. To put a new terminal on the right, propose terminal_run then window_place with target "last_opened" and destination "right".
 For window_focus, target is an exact address from the current window list or "last_opened" after a launch. It brings an existing window into focus and verifies the active window. Do not guess a window address from its title if several windows match.
@@ -678,6 +680,8 @@ def describe(action: dict) -> str:
         return f"Click {action['content']} in {action['target']}"
     if kind == "desktop_fill":
         return f"Replace {action['destination']} in {action['target']} with: {action['content']}"
+    if kind == "screen_read":
+        return "Read visible screen text with local OCR"
     if kind == "reminder_add":
         return f"Remind at {action['target']}: {action['content']}"
     if kind == "email_prepare":
@@ -734,6 +738,8 @@ def execute(action: dict, db: sqlite3.Connection) -> str:
         return desktop.click(target, action["content"])
     if kind == "desktop_fill":
         return desktop.fill(target, action["destination"], action["content"])
+    if kind == "screen_read":
+        return screen.read_text()
     if kind == "email_prepare":
         return mail.prepare(db, settings().get("email_provider", "outlook"), target, action["destination"], action["content"])
     if kind == "workspace_switch":
@@ -905,7 +911,7 @@ def _run_request(request: str, agent: str, db: sqlite3.Connection, *, plan: dict
         raise ValueError("Agent returned an invalid plan")
     db.execute("UPDATE task_runs SET mode=?,plan=?,status='running' WHERE id=?", (proposal["mode"], json.dumps(proposal, ensure_ascii=False), task_id))
     db.commit()
-    desktop_task = any(isinstance(action, dict) and action.get("type") in {"workspace_switch", "window_move", "window_place", "window_focus", "window_shortcut", "terminal_run", "open_app", "open_url", "browser_open", "desktop_fill"} for action in proposal["actions"])
+    desktop_task = any(isinstance(action, dict) and action.get("type") in {"workspace_switch", "window_move", "window_place", "window_focus", "window_shortcut", "terminal_run", "open_app", "open_url", "browser_open", "desktop_fill", "screen_read"} for action in proposal["actions"])
     if desktop_task:
         db.execute("UPDATE task_runs SET desktop_before=? WHERE id=?", (json.dumps(hypr.available_windows()), task_id))
         db.commit()
@@ -943,7 +949,8 @@ def _run_request(request: str, agent: str, db: sqlite3.Connection, *, plan: dict
                 if last_opened is None:
                     result += "; no unique new window was detected for placement"
             outcome = "pending" if action["type"] == "terminal_run" else "executed"
-            record_action(db, agent, request, action, outcome, result, task_id)
+            logged_result = f"OCR completed: {len(result)} characters (screen text not stored in Activity)" if action["type"] == "screen_read" else result
+            record_action(db, agent, request, action, outcome, logged_result, task_id)
             outcomes.append(outcome)
             if action["type"] in {"browser_read", "browser_click", "email_inbox"}:
                 report("result", result.splitlines()[0] if result else "Browser action completed")

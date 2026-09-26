@@ -16,6 +16,8 @@ This checks planning, terminal launch, window association, workspace and geometr
 
 A separate synthetic Foot window received `CTRL+L` through Hyprland's exact-address shortcut dispatcher, which returned success. The test window was closed. This verifies dispatch acceptance and targeting, not the application effect; arbitrary keyboard and mouse control remain open work.
 
+The live Grim-to-Tesseract pipeline returned 705 text characters from the current screen without printing or saving the content. Synthetic tests verify in-memory image transfer, timeout reporting, and that raw OCR does not enter the Activity action log. OCR text may still become part of a conversational answer when the user asks about the screen.
+
 ## Local reminders and memory
 
 A synthetic reminder was scheduled in the local database. The running background service delivered it to the real notification daemon and stored the returned notification ID after one attempt. The app exposed its Reminders page and Add reminder control through accessibility.

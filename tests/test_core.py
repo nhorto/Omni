@@ -104,6 +104,14 @@ class OmiCoreTests(unittest.TestCase):
             self.assertEqual(db.execute("SELECT input_tokens,output_tokens,cached_input_tokens FROM agent_calls").fetchone(), (14116, 5, 11776))
             self.assertNotIn("private output", str(db.execute("SELECT * FROM agent_calls").fetchone()))
 
+    def test_screen_text_is_used_transiently_but_not_saved_in_action_log(self):
+        action = {"type": "screen_read", "target": "", "destination": "", "content": "", "argv": []}
+        with assistant.database() as db, patch.object(assistant.screen, "read_text", return_value="PRIVATE SCREEN TEXT"), patch.object(hypr, "available_windows", return_value=[]), contextlib.redirect_stdout(io.StringIO()):
+            assistant.run_request("Read the screen", "codex", db, plan=plan("action", action))
+            logged = db.execute("SELECT result FROM actions").fetchone()[0]
+            self.assertIn("OCR completed", logged)
+            self.assertNotIn("PRIVATE SCREEN TEXT", logged)
+
     def test_conversation_threads_are_separate(self):
         with assistant.database() as db, patch.object(assistant, "speak_text"):
             first = assistant.new_session(db)
