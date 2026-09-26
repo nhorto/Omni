@@ -16,6 +16,7 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, Gtk, Gdk, Gio  # noqa: E402
 
 import assistant as omi
+import voice_bridge
 
 
 def textview(editable: bool = True) -> Gtk.TextView:
@@ -166,6 +167,7 @@ class OmiWindow(Gtk.ApplicationWindow):
         self.continuous_button.connect("clicked", lambda *_: self.voice_command("continuous", "toggle"))
         voice_buttons.append(self.continuous_button)
         box.append(voice_card)
+        self.refresh_voice_buttons()
         row = Gtk.Box(spacing=12)
         row.set_vexpand(True)
         box.append(row)
@@ -206,8 +208,17 @@ class OmiWindow(Gtk.ApplicationWindow):
         try:
             subprocess.run(["/usr/bin/python3", str(omi.ROOT / "voice_bridge.py"), *args], check=True, timeout=5, capture_output=True, text=True)
             self.status_label.set_text("Voice control updated; speak and finish when ready")
+            self.refresh_voice_buttons()
         except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
             self.status_label.set_text(f"Voice control failed: {exc}")
+
+    def refresh_voice_buttons(self) -> None:
+        state = voice_bridge.voxtype_state()
+        continuous = voice_bridge.CONTINUOUS.exists()
+        omi_recording = voice_bridge.omi_recording().exists()
+        self.talk_button.set_label("Stop continuous listening" if continuous else "Finish and send to Omi" if omi_recording and state == "recording" else "●  Talk to Omi")
+        self.talk_button.set_sensitive(state != "transcribing" and (state != "recording" or omi_recording))
+        self.continuous_button.set_label("Stop continuous listening" if continuous else "Continuous listening")
 
     def refresh_sessions(self) -> None:
         self.rebuilding_sessions = True
@@ -613,6 +624,7 @@ class OmiWindow(Gtk.ApplicationWindow):
         self.activity_view.get_buffer().set_text("\n\n".join(lines))
 
     def poll_activity(self) -> bool:
+        self.refresh_voice_buttons()
         if self.stack.get_visible_child_name() == "activity" and getattr(self, "activity_pending", False):
             self.refresh_activity()
         return True

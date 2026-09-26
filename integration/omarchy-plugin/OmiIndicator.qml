@@ -158,7 +158,7 @@ Item {
 
         Text {
           anchors.centerIn: parent
-          text: "Stop"
+          text: root.continuous ? "Stop" : "Finish"
           color: Color.background
           font.family: Style.font.family
           font.bold: true
