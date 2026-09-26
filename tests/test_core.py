@@ -156,7 +156,7 @@ class OmiCoreTests(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):
                 assistant.run_request("Open a terminal on the right", "codex", db, plan=plan("action", terminal, placement), approve=lambda _: True)
             place.assert_not_called()
-            self.assertEqual([row[0] for row in db.execute("SELECT status FROM actions ORDER BY id")], ["executed", "failed"])
+            self.assertEqual([row[0] for row in db.execute("SELECT status FROM actions ORDER BY id")], ["pending", "failed"])
             self.assertEqual(db.execute("SELECT status FROM task_runs").fetchone()[0], "partial")
 
     def test_declined_terminal_stops_following_desktop_actions(self):
@@ -169,6 +169,32 @@ class OmiCoreTests(unittest.TestCase):
             place.assert_not_called()
             self.assertEqual([row[0] for row in db.execute("SELECT status FROM actions ORDER BY id")], ["cancelled"])
             self.assertEqual(db.execute("SELECT status FROM task_runs").fetchone()[0], "cancelled")
+
+    def test_failed_command_stops_plan_and_is_not_training_eligible(self):
+        command = {"type": "run_command", "target": "", "destination": "", "content": "", "argv": ["python3", "-c", "import sys; sys.exit(7)"]}
+        with assistant.database() as db, contextlib.redirect_stdout(io.StringIO()):
+            assistant.run_request("Run failing command", "codex", db, plan=plan("action", command), approve=lambda _: True)
+            self.assertEqual(db.execute("SELECT status FROM actions").fetchone()[0], "failed")
+            self.assertEqual(db.execute("SELECT status FROM task_runs").fetchone()[0], "partial")
+            with self.assertRaisesRegex(ValueError, "Only completed"):
+                assistant.set_task_feedback(db, 1, "correct")
+
+    def test_terminal_result_reconciles_after_worker_finishes(self):
+        from terminal_job import run
+        import json
+        for code, expected in ((0, "complete"), (6, "partial")):
+            with self.subTest(code=code), assistant.database() as db:
+                run_id = db.execute("INSERT INTO task_runs(source,request,agent,model,mode,plan,status,created_at) VALUES(?,?,?,?,?,?,?,?)", ("test", "terminal", "codex", "test", "action", "{}", "awaiting_commands", assistant.now())).lastrowid
+                job_id = f"{run_id:032x}"
+                action = {"type": "terminal_run", "argv": ["python3", "-c", f"import sys; sys.exit({code})"], "_job_id": job_id}
+                assistant.record_action(db, "codex", "terminal", action, "pending", "started", run_id)
+                jobs = assistant.DATA / "terminal-jobs"
+                assistant.private_dir(jobs)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    run(jobs / f"{job_id}.json", action["argv"])
+                self.assertEqual(assistant.reconcile_terminal_jobs(db), 1)
+                self.assertEqual(db.execute("SELECT status FROM task_runs WHERE id=?", (run_id,)).fetchone()[0], expected)
+                self.assertFalse((jobs / f"{job_id}.json").exists())
 
     def test_concurrent_request_cannot_execute_while_approval_is_pending(self):
         command = {"type": "run_command", "target": "", "destination": "", "content": "", "argv": ["printf", "test"]}

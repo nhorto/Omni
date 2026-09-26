@@ -8,15 +8,15 @@ A personal desktop assistant for Omarchy Linux: describe what you want in text o
 
 - Native GTK app with conversations, editable local memory, searchable knowledge notes, activity review, and settings.
 - Codex or Claude CLI adapters using their existing sign-in. Simple exact requests can run locally without an agent call; model overrides are available.
-- Workspace switching, window moves and placement, app/site launches, and visible terminals with approved commands.
-- Separate Chromium profile for browser reading, clicks, and form input, plus accessible desktop controls via AT-SPI.
+- Workspace switching, exact existing-window focus, window moves and placement, app/site launches, and visible terminals with approved commands.
+- Separate Chromium profile for browser reading, clicks, and form input, plus accessible desktop controls and named text fields via AT-SPI.
 - Voxtype transcript intake, push-to-talk and continuous mode, a bar indicator and movable recording card. Hardware testing remains required.
 - Spoken answers to questions via local Piper or a configured ElevenLabs voice. Action requests stay quiet.
 - Persistent local reminders with quiet hours, retry handling, a review queue, and an app page.
 - Local action history with corrections and observed before/after desktop state. Only tasks reviewed as correct enter the candidate training export.
 - Outlook draft preparation and guarded web send adapter. Live account validation and durable mail/calendar sync are unfinished.
 
-Desktop plans stop at a failed or declined step. App/terminal launches are reported as requests; launching a terminal does not prove its command succeeded. General visual computer use, notification triage beyond local reminders, and Outlook monitoring are under development.
+Desktop plans stop at a failed or declined step. Visible terminal commands start in a pending state; the background service records their exit code and up to 4,000 trailing output characters when they finish, including after a restart. A running command is not eligible for reviewed training export. General visual computer use, notification triage beyond local reminders, and Outlook monitoring are under development.
 
 ## Setup
 

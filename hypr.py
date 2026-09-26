@@ -61,6 +61,21 @@ def move_window(address: str, value: str) -> str:
     return f"Moved {item['title'] or item['class']} to workspace {number}"
 
 
+def focus_window(address: str) -> str:
+    item = window(address)
+    if item["workspace"] is None or item["workspace"] < 1:
+        raise ValueError("Window is not on a regular workspace")
+    result = subprocess.run(["hyprctl", "dispatch", f'hl.dsp.focus({{ window = "address:{address}" }})'], capture_output=True, text=True, timeout=10, check=True)
+    if "ok" not in result.stdout.lower():
+        raise RuntimeError("Hyprland did not accept the window focus")
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        if _json("activewindow").get("address") == address:
+            return f"Focused {item['title'] or item['class']}"
+        time.sleep(0.05)
+    raise RuntimeError("Window focus could not be verified")
+
+
 def detect_new_window(before: set[str], timeout: float = 4.0, expected_class: str | None = None) -> str | None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:

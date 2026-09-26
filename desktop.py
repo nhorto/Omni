@@ -57,11 +57,54 @@ def controls(name: str) -> list[tuple[str, str, object]]:
     return found
 
 
+def editable_fields(name: str) -> list[tuple[str, object]]:
+    app = app_by_name(name)
+    found = []
+    visited = 0
+
+    def walk(node, depth: int) -> None:
+        nonlocal visited
+        if visited >= 500 or depth > 24:
+            return
+        visited += 1
+        try:
+            if node.get_editable_text_iface() is not None:
+                label = node.get_name()
+                if label:
+                    found.append((label, node))
+            for index in range(min(node.get_child_count(), 50)):
+                walk(node.get_child_at_index(index), depth + 1)
+        except Exception:
+            return
+
+    walk(app, 0)
+    return found
+
+
+def resolve_field(name: str, label: str):
+    matches = [node for actual, node in editable_fields(name) if actual == label]
+    if len(matches) != 1:
+        raise ValueError("Editable field is not unique or unavailable through accessibility")
+    return matches[0]
+
+
+def fill(name: str, label: str, value: str) -> str:
+    node = resolve_field(name, label)
+    editable = node.get_editable_text_iface()
+    if not editable.set_text_contents(value):
+        raise RuntimeError("Desktop field rejected the text")
+    readable = node.get_text_iface()
+    if readable is None or readable.get_text(0, -1) != value:
+        raise RuntimeError("Desktop field text could not be verified")
+    return f"Filled {label} in {name}"
+
+
 def read(name: str) -> str:
     items = controls(name)
-    if not items:
-        return f"{name}: no accessible clickable controls were found"
-    return "\n".join(f"{role}: {label}" for label, role, _ in items[:80])
+    fields = editable_fields(name)
+    if not items and not fields:
+        return f"{name}: no accessible controls were found"
+    return "\n".join([*(f"{role}: {label}" for label, role, _ in items[:80]), *(f"editable: {label}" for label, _ in fields[:80])])
 
 
 def resolve(name: str, label: str):
