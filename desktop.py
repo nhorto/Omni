@@ -110,8 +110,6 @@ def read(name: str) -> str:
 def resolve(name: str, label: str):
     items = controls(name)
     matches = [(actual, node) for actual, _, node in items if actual == label]
-    if not matches:
-        matches = [(actual, node) for actual, _, node in items if len(actual) >= 3 and label.startswith(actual) and len(label) - len(actual) <= 24]
     if len(matches) != 1:
         raise ValueError("Desktop control is not unique or has no accessibility action")
     return matches[0]

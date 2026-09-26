@@ -53,7 +53,7 @@ python3 assistant.py doctor
 
 For a desktop workflow, try: “Go to workspace 3, open a terminal on the left and run pwd, then open another terminal on the right and run date.” Each terminal command requires approval. New-window placement stops if the target cannot be identified uniquely.
 
-Use Settings to choose an available agent and model. Conversation threads provide bounded follow-up context; desktop commands go into Activity. Add project context under Knowledge, and edit background and tone under Profile.
+Use Settings to check setup and choose an available agent and model. Conversation threads provide bounded follow-up context; desktop commands go into Activity. Add project context under Knowledge, and edit background and tone under Profile.
 
 ## Reminders
 

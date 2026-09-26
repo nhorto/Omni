@@ -5,6 +5,12 @@ import desktop
 
 
 class DesktopFillTests(unittest.TestCase):
+    def test_click_target_rejects_stale_or_extended_label(self):
+        node = Mock()
+        with patch.object(desktop, 'controls', return_value=[('Save', 'button', node)]):
+            with self.assertRaisesRegex(ValueError, 'not unique'):
+                desktop.resolve('Notes', 'Save previous version')
+
     def test_exact_unique_field_is_filled_and_read_back(self):
         editable = Mock()
         editable.set_text_contents.return_value = True

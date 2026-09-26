@@ -711,6 +711,11 @@ class OmiWindow(Gtk.ApplicationWindow):
 
     def build_settings(self) -> None:
         box = self.panel("Settings", "Choose your subscription agent, model, memory behavior, and spoken replies.")
+        setup = Gtk.Button(label="Check setup")
+        setup.connect("clicked", self.check_setup)
+        box.append(setup)
+        self.setup_state = label("Check desktop, voice, and agent readiness here.", "muted")
+        box.append(self.setup_state)
         box.append(label("Subscription agent", "section-title"))
         self.agent_drop = Gtk.DropDown.new_from_strings(["Codex", "Claude"])
         box.append(self.agent_drop)
@@ -754,6 +759,18 @@ class OmiWindow(Gtk.ApplicationWindow):
         save.add_css_class("suggested-action")
         save.connect("clicked", self.save_settings)
         box.append(save)
+
+    def check_setup(self, _button: Gtk.Button) -> None:
+        self.setup_state.set_text("Checking local setup…")
+
+        def work() -> None:
+            try:
+                report = "\n".join(f"{name}: {state}" for name, state in omi.doctor())
+            except Exception as exc:
+                report = f"Setup check failed: {type(exc).__name__}"
+            GLib.idle_add(self.setup_state.set_text, report)
+
+        threading.Thread(target=work, daemon=True).start()
 
     def refresh_settings(self) -> None:
         current = omi.settings()
