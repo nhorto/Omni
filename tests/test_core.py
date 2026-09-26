@@ -312,7 +312,11 @@ class OmiCoreTests(unittest.TestCase):
     def test_browser_target_must_match_visible_control(self):
         page = '- link "Learn more" [ref=f2e6] [cursor=pointer]:\n- heading "Example" [ref=f2e7]'
         with patch.object(browser, "snapshot", return_value=page):
-            self.assertEqual(browser.resolve_target("Learn more rep?"), ("f2e6", "Learn more"))
+            self.assertEqual(browser.resolve_target("Learn more"), ("f2e6", "Learn more"))
+            with self.assertRaises(ValueError):
+                browser.resolve_target("Learn more rep?")
+            with self.assertRaises(ValueError):
+                browser.resolve_target("f2e6 click")
             with self.assertRaises(ValueError):
                 browser.resolve_target("Example")
 

@@ -82,14 +82,10 @@ def resolve_target(target: str, *, fill_field: bool = False) -> tuple[str, str]:
     allowed = {"textbox", "searchbox", "combobox", "spinbutton"} if fill_field else {"link", "button", "menuitem", "tab", "checkbox", "radio"}
     candidates = [(ref, label or role) for role, label, ref in matches if role in allowed]
     raw = target.strip()
-    token = raw.split(maxsplit=1)[0] if raw else ""
-    if REF.fullmatch(token):
-        matching = [(ref, label) for ref, label in candidates if ref == token]
+    if REF.fullmatch(raw):
+        matching = [(ref, label) for ref, label in candidates if ref == raw]
     else:
         matching = [(ref, label) for ref, label in candidates if label == raw]
-        if not matching:
-            # Some agents append a short gloss after an otherwise exact label.
-            matching = [(ref, label) for ref, label in candidates if len(label) >= 3 and raw.startswith(label) and len(raw) - len(label) <= 24]
     if len(matching) != 1:
         raise ValueError("Browser target is not a unique visible control on the current page")
     return matching[0]
