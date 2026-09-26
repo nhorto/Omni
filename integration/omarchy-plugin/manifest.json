@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "local.omi",
+  "name": "Omi",
+  "version": "0.1.0",
+  "author": "Omni contributors",
+  "description": "Status and launcher for Omi, the personal assistant.",
+  "kinds": ["bar-widget", "panel"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "barWidget": "BarWidget.qml",
+    "panel": "OmiIndicator.qml"
+  },
+  "barWidget": {
+    "displayName": "Omi",
+    "description": "Shows Omi's state and opens the text assistant.",
+    "category": "AI",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

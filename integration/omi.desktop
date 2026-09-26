@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Omi
+Comment=Personal desktop assistant
+Exec=@OMI_LAUNCHER@
+Icon=system-run
+Terminal=false
+Categories=Utility;
+StartupNotify=true

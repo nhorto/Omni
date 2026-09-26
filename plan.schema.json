@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "properties": {
+    "mode": {"type": "string", "enum": ["action", "conversation"]},
+    "reply": {"type": "string"},
+    "memories": {"type": "array", "maxItems": 3, "items": {"type": "string"}},
+    "actions": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": {"type": "string", "enum": ["open_app", "open_url", "list_files", "copy_file", "move_file", "trash_file", "run_command", "terminal_run", "remember", "recall", "browser_open", "browser_read", "browser_click", "browser_fill", "browser_back", "desktop_read", "desktop_click", "email_prepare", "email_send", "email_inbox", "workspace_switch", "window_move", "window_place"]},
+          "target": {"type": "string"},
+          "destination": {"type": "string"},
+          "content": {"type": "string"},
+          "argv": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["type", "target", "destination", "content", "argv"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["mode", "reply", "actions", "memories"],
+  "additionalProperties": false
+}

@@ -1,0 +1,14 @@
+[Unit]
+Description=Omi voice and text input bridge
+After=graphical-session.target voxtype.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/omi-voice serve
+Restart=on-failure
+RestartSec=3
+Environment=XDG_RUNTIME_DIR=%t
+
+[Install]
+WantedBy=graphical-session.target

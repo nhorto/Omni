@@ -1,0 +1,17 @@
+name: Tests
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install desktop Python bindings
+        run: sudo apt-get update && sudo apt-get install -y python3-gi gir1.2-gtk-4.0 gir1.2-atspi-2.0
+      - name: Compile and test
+        run: |
+          /usr/bin/python3 -m compileall -q .
+          /usr/bin/python3 -m unittest discover -s tests -v
+          /usr/bin/python3 scripts/check_public.py
+          git diff --check
