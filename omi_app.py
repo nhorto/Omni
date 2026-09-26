@@ -543,7 +543,7 @@ class OmiWindow(Gtk.ApplicationWindow):
     def refresh_activity(self) -> None:
         with omi.database() as db:
             actions = db.execute("SELECT request,status,result,created_at FROM actions ORDER BY id DESC LIMIT 60").fetchall()
-            calls = db.execute("SELECT agent,model,purpose,duration_ms,created_at FROM agent_calls ORDER BY id DESC LIMIT 30").fetchall()
+            calls = db.execute("SELECT agent,model,purpose,duration_ms,created_at,input_tokens,output_tokens,cached_input_tokens FROM agent_calls ORDER BY id DESC LIMIT 30").fetchall()
             tasks = db.execute("SELECT id,request,status,feedback,created_at,error FROM task_runs WHERE mode='action' OR status IN ('planning_failed','invalid_plan') OR (source='voice' AND status='cancelled') ORDER BY id DESC LIMIT 40").fetchall()
         self.activity_pending = any(status == "awaiting_commands" for _, _, status, _, _, _ in tasks)
         while child := self.task_list.get_first_child():
@@ -572,7 +572,9 @@ class OmiWindow(Gtk.ApplicationWindow):
         lines = ["ACTIONS"]
         lines.extend(f"{created[:19]} · {status} · {request}\n{result[:350]}" for request, status, result, created in actions)
         lines.append("\nAGENT CALLS")
-        lines.extend(f"{created[:19]} · {agent} / {model} · {purpose} · {duration} ms" for agent, model, purpose, duration, created in calls)
+        lines.extend(f"{created[:19]} · {agent} / {model} · {purpose} · {duration} ms" +
+                     (f" · {incoming} in ({cached or 0} cached), {outgoing} out" if incoming is not None and outgoing is not None else " · token usage unavailable")
+                     for agent, model, purpose, duration, created, incoming, outgoing, cached in calls)
         self.activity_view.get_buffer().set_text("\n\n".join(lines))
 
     def poll_activity(self) -> bool:

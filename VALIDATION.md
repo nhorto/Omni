@@ -24,6 +24,8 @@ Automated cases cover restart catch-up, no repeated delivery after completion, a
 
 Synthetic voice checks now cover a planning failure reaching Activity, an approval window closed before execution, and a completed review releasing the bridge while the app remains open. Live microphone and interruption behavior still needs hardware validation.
 
+The installed Codex CLI was checked with a short read-only JSONL run. Its `turn.completed` event contained input, cached input, and output token counts. A synthetic parser/storage case verifies that Omi stores those counts without keeping the event text. The full Omi planner with JSONL accounting has not yet been exercised in a live request.
+
 ## Still awaiting live validation
 
 Microphone capture/continuous listening, the selected ElevenLabs voice, Outlook account access and calendar sync, and general visual/keyboard/mouse control across arbitrary apps. See ROADMAP.md for the full acceptance criteria.

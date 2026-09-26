@@ -93,6 +93,17 @@ class OmiCoreTests(unittest.TestCase):
             self.assertEqual(db.execute("SELECT COUNT(*) FROM agent_calls").fetchone()[0], 0)
             self.assertEqual([row[0] for row in db.execute("SELECT status FROM actions")], ["executed", "executed"])
 
+    def test_codex_json_usage_is_stored_without_event_text(self):
+        events = '\n'.join((
+            '{"type":"item.completed","item":{"text":"private output"}}',
+            '{"type":"turn.completed","usage":{"input_tokens":14116,"cached_input_tokens":11776,"output_tokens":5}}',
+        ))
+        self.assertEqual(assistant.codex_usage(events), {"input_tokens": 14116, "output_tokens": 5, "cached_input_tokens": 11776})
+        with assistant.database() as db, patch.object(assistant, "plan_with_agent", return_value=(plan("action"), assistant.codex_usage(events))):
+            assistant.plan_request("codex", "Complex desktop request", [], [], db)
+            self.assertEqual(db.execute("SELECT input_tokens,output_tokens,cached_input_tokens FROM agent_calls").fetchone(), (14116, 5, 11776))
+            self.assertNotIn("private output", str(db.execute("SELECT * FROM agent_calls").fetchone()))
+
     def test_conversation_threads_are_separate(self):
         with assistant.database() as db, patch.object(assistant, "speak_text"):
             first = assistant.new_session(db)
