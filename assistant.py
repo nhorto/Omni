@@ -179,6 +179,35 @@ def agent_status(agent: str) -> str:
         return "login status unknown"
 
 
+def doctor() -> list[tuple[str, str]]:
+    """Read-only checks for this installation; optional services may be absent."""
+    checks: list[tuple[str, str]] = []
+    for name, executable in (("Hyprland control", "hyprctl"), ("Foot terminal", "foot"), ("Desktop notifications", "notify-send")):
+        checks.append((name, "found" if shutil.which(executable) else "missing"))
+    if shutil.which("hyprctl"):
+        try:
+            subprocess.run(["hyprctl", "activeworkspace", "-j"], capture_output=True, text=True, timeout=5, check=True)
+            checks.append(("Hyprland session", "available"))
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            checks.append(("Hyprland session", "unavailable"))
+    for name, executable in (("Voxtype input", "voxtype"), ("PipeWire capture", "pw-record"), ("PipeWire playback", "pw-play"), ("Keyring for ElevenLabs", "secret-tool")):
+        checks.append((name, "found" if shutil.which(executable) else "not configured"))
+    voice = Path(settings().get("voice_model", str(DATA / "tts/voices/en_US-lessac-medium.onnx")))
+    piper_ready = (DATA / "tts/piper/piper").is_file() and voice.is_file() and Path(str(voice) + ".json").is_file()
+    checks.append(("Piper speech", "ready" if piper_ready else "not configured"))
+    chosen = settings().get("agent", "codex")
+    try:
+        checks.append((f"Selected agent ({chosen})", agent_status(chosen)))
+    except (OSError, subprocess.TimeoutExpired):
+        checks.append((f"Selected agent ({chosen})", "status unavailable"))
+    try:
+        service = subprocess.run(["systemctl", "--user", "is-active", "omi-voice.service"], capture_output=True, text=True, timeout=5)
+        checks.append(("Background service", "active" if service.returncode == 0 else "inactive"))
+    except (OSError, subprocess.TimeoutExpired):
+        checks.append(("Background service", "status unavailable"))
+    return checks
+
+
 def relevant_memories(db: sqlite3.Connection, request: str) -> list[str]:
     words = [w for w in re.findall(r"[\w-]+", request.lower()) if len(w) > 3 and w not in SEARCH_STOP_WORDS][:8]
     if not words:
@@ -925,6 +954,7 @@ def main() -> int:
     ask.add_argument("request", nargs="+", help="Natural-language request")
     ask.add_argument("--agent", choices=["codex", "claude"])
     sub.add_parser("chat", help="Open an interactive text session")
+    sub.add_parser("doctor", help="Check local desktop, voice, and agent setup")
     agents = sub.add_parser("agent", help="Show or set the preferred agent")
     agents.add_argument("name", nargs="?", choices=["codex", "claude"])
     sub.add_parser("select-agent", help="Interactive agent selector for the bar")
@@ -950,6 +980,10 @@ def main() -> int:
     review = sub.add_parser("review", help="Review a prepared voice action plan")
     review.add_argument("plan_file")
     args = parser.parse_args()
+    if args.command == "doctor":
+        for name, state in doctor():
+            print(f"{name}: {state}")
+        return 0
     if args.command == "agent":
         current = settings()
         if args.name:

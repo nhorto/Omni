@@ -12,7 +12,7 @@ The definition of done is the complete personal-assistant vision, including proa
 | Outlook and calendar | Web draft/send adapter with simulated tests | Account setup is deferred. After sign-in: validate live read/draft/send, delegated connection, incremental mail/calendar sync, reminders/suggestions, and briefing accuracy. |
 | Models and usage | Codex/Claude selection; manual model override; local exact-command routing | Keep Codex usable independently of Claude, improve local coverage and routing with benchmarks, record available usage metadata, and handle provider limits gracefully. |
 | Action dataset | Request/plan/step history, observed before/after windows, terminal exit results, feedback, and versioned reviewed export | Privacy review, held-out evaluation, and a separate local-model training experiment. Pending or failed terminal jobs cannot enter training export. |
-| App and delivery | Native control app, portable user installer, public repository, public-file check, and CI | Dependency diagnostics, onboarding, clearer errors, broader integration coverage, and documented upgrade/recovery. |
+| App and delivery | Native control app, portable user installer, read-only setup diagnostics, public repository, public-file check, and CI | In-app onboarding, clearer errors, broader integration coverage, and documented upgrade/recovery. |
 
 ## Active order
 
