@@ -61,6 +61,7 @@ class OmiWindow(Gtk.ApplicationWindow):
         self.session_id: int | None = None
         self.rebuilding_sessions = False
         self.approval_event: threading.Event | None = None
+        self.review_completion: Path | None = None
         self.approval_result = False
         self.connect("close-request", self.on_close)
 
@@ -229,6 +230,7 @@ class OmiWindow(Gtk.ApplicationWindow):
             self.append_chat("Error", "The pending review is unavailable.")
             return False
         payload = json.loads(path.read_text())
+        self.review_completion = path.with_suffix(".done")
         path.unlink()
         self.append_chat("Voice request", payload["request"])
         self.start_worker(payload["request"], payload["agent"], payload["plan"])
@@ -249,6 +251,9 @@ class OmiWindow(Gtk.ApplicationWindow):
             except Exception as exc:
                 GLib.idle_add(self.on_event, "error", str(exc))
             finally:
+                if self.review_completion is not None:
+                    self.review_completion.write_text("done\n")
+                    self.review_completion.chmod(0o600)
                 GLib.idle_add(self.worker_done)
 
         threading.Thread(target=work, daemon=True).start()
@@ -539,11 +544,11 @@ class OmiWindow(Gtk.ApplicationWindow):
         with omi.database() as db:
             actions = db.execute("SELECT request,status,result,created_at FROM actions ORDER BY id DESC LIMIT 60").fetchall()
             calls = db.execute("SELECT agent,model,purpose,duration_ms,created_at FROM agent_calls ORDER BY id DESC LIMIT 30").fetchall()
-            tasks = db.execute("SELECT id,request,status,feedback,created_at FROM task_runs WHERE mode='action' ORDER BY id DESC LIMIT 40").fetchall()
-        self.activity_pending = any(status == "awaiting_commands" for _, _, status, _, _ in tasks)
+            tasks = db.execute("SELECT id,request,status,feedback,created_at,error FROM task_runs WHERE mode='action' OR status IN ('planning_failed','invalid_plan') OR (source='voice' AND status='cancelled') ORDER BY id DESC LIMIT 40").fetchall()
+        self.activity_pending = any(status == "awaiting_commands" for _, _, status, _, _, _ in tasks)
         while child := self.task_list.get_first_child():
             self.task_list.remove(child)
-        for ident, request, status, feedback, created in tasks:
+        for ident, request, status, feedback, created, error in tasks:
             row = Gtk.Box(spacing=8)
             row.set_margin_top(8)
             row.set_margin_bottom(8)
@@ -553,6 +558,8 @@ class OmiWindow(Gtk.ApplicationWindow):
             info.set_hexpand(True)
             info.append(label(request[:160]))
             info.append(label(f"#{ident} · {created[:16]} · {status} · {feedback}", "muted"))
+            if error:
+                info.append(label(error[:250], "muted"))
             row.append(info)
             if status == "complete":
                 correct = Gtk.Button(label="Correct")

@@ -208,6 +208,43 @@ class OmiCoreTests(unittest.TestCase):
             execute.assert_not_called()
             self.assertEqual(db.execute("SELECT COUNT(*) FROM task_runs").fetchone()[0], 1)
 
+    def test_failed_voice_planning_is_visible_in_activity_history(self):
+        with patch.object(assistant, "plan_request", side_effect=RuntimeError("subscription unavailable")):
+            with self.assertRaisesRegex(RuntimeError, "subscription unavailable"):
+                voice_bridge.process_request("Open my notes")
+        with assistant.database() as db:
+            self.assertEqual(db.execute("SELECT source,request,status,error FROM task_runs").fetchone(),
+                             ("voice", "Open my notes", "planning_failed", "subscription unavailable"))
+
+    def test_failed_direct_planning_records_error(self):
+        with assistant.database() as db, patch.object(assistant, "plan_request", side_effect=RuntimeError("agent timeout")):
+            with self.assertRaisesRegex(RuntimeError, "agent timeout"):
+                assistant.run_request("Open my notes", "codex", db)
+            self.assertEqual(db.execute("SELECT status,error FROM task_runs").fetchone(), ("planning_failed", "agent timeout"))
+
+    def test_closed_voice_review_is_recorded_as_cancelled(self):
+        import voice_bridge
+        with patch.object(voice_bridge, "PENDING", assistant.RUNTIME / "pending"), patch.object(voice_bridge.subprocess, "Popen") as launch:
+            launch.return_value.poll.return_value = 0
+            voice_bridge.review_in_app("Move my notes", "codex", plan("action", {"type": "move_file"}))
+            launch.return_value.poll.assert_called_once()
+        with assistant.database() as db:
+            self.assertEqual(db.execute("SELECT source,request,status,error FROM task_runs").fetchone(),
+                             ("voice", "Move my notes", "cancelled", "Review window closed before the request ran"))
+
+    def test_voice_bridge_resumes_when_review_task_finishes_with_window_open(self):
+        import voice_bridge
+        def finish_review(_seconds):
+            pending = next(voice_bridge.PENDING.glob("*.json"))
+            pending.unlink()
+            pending.with_suffix(".done").write_text("done\n")
+        with patch.object(voice_bridge, "PENDING", assistant.RUNTIME / "pending"), patch.object(voice_bridge.subprocess, "Popen") as launch, patch.object(voice_bridge.time, "sleep", side_effect=finish_review):
+            launch.return_value.poll.return_value = None
+            voice_bridge.review_in_app("Move my notes", "codex", plan("action", {"type": "move_file"}))
+        self.assertEqual(list((assistant.RUNTIME / "pending").iterdir()), [])
+        with assistant.database() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM task_runs").fetchone()[0], 0)
+
     def test_malformed_action_stops_the_plan_and_records_failure(self):
         with assistant.database() as db, patch.object(assistant, "execute") as execute:
             with contextlib.redirect_stdout(io.StringIO()):

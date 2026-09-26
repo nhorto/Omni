@@ -106,7 +106,7 @@ def database() -> Iterator[sqlite3.Connection]:
         db.execute("ALTER TABLE actions ADD COLUMN run_id INTEGER")
     db.execute("CREATE TABLE IF NOT EXISTS task_runs (id INTEGER PRIMARY KEY, source TEXT NOT NULL, request TEXT NOT NULL, agent TEXT NOT NULL, model TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'pending', plan TEXT, status TEXT NOT NULL DEFAULT 'planning', feedback TEXT NOT NULL DEFAULT 'unreviewed', correction TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, completed_at TEXT)")
     task_columns = {row[1] for row in db.execute("PRAGMA table_info(task_runs)")}
-    for column in ("desktop_before", "desktop_after"):
+    for column in ("desktop_before", "desktop_after", "error"):
         if column not in task_columns:
             db.execute(f"ALTER TABLE task_runs ADD COLUMN {column} TEXT")
     db.execute("CREATE TABLE IF NOT EXISTS conversations (id INTEGER PRIMARY KEY, agent TEXT NOT NULL, request TEXT NOT NULL, mode TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL)")
@@ -761,6 +761,12 @@ def record_action(db: sqlite3.Connection, agent: str, request: str, action: dict
     db.commit()
 
 
+def record_planning_failure(db: sqlite3.Connection, request: str, agent: str, source: str, error: Exception) -> None:
+    db.execute("INSERT INTO task_runs(source,request,agent,model,mode,status,error,created_at,completed_at) VALUES(?,?,?,?,?,?,?,?,?)",
+               (source, request, agent, selected_model(agent), "pending", "planning_failed", str(error)[:2000], now(), now()))
+    db.commit()
+
+
 def set_task_feedback(db: sqlite3.Connection, task_id: int, verdict: str, correction: str = "") -> None:
     if verdict not in {"correct", "incorrect", "unreviewed"}:
         raise ValueError("Feedback must be correct, incorrect, or unreviewed")
@@ -790,8 +796,8 @@ def export_training(db: sqlite3.Connection, path: Path) -> int:
 
 
 def export_tasks(db: sqlite3.Connection, path: Path) -> int:
-    rows = db.execute("SELECT id,source,request,agent,model,mode,plan,status,feedback,correction,created_at,completed_at,desktop_before,desktop_after FROM task_runs ORDER BY id").fetchall()
-    keys = ("id", "source", "request", "agent", "model", "mode", "plan", "status", "feedback", "correction", "created_at", "completed_at", "desktop_before", "desktop_after")
+    rows = db.execute("SELECT id,source,request,agent,model,mode,plan,status,feedback,correction,created_at,completed_at,desktop_before,desktop_after,error FROM task_runs ORDER BY id").fetchall()
+    keys = ("id", "source", "request", "agent", "model", "mode", "plan", "status", "feedback", "correction", "created_at", "completed_at", "desktop_before", "desktop_after", "error")
     with path.open("x") as output:
         for row in rows:
             record = dict(zip(keys, row))
@@ -846,12 +852,12 @@ def _run_request(request: str, agent: str, db: sqlite3.Connection, *, plan: dict
         report("context", f"Sharing {len(knowledge)} relevant knowledge note(s) with {agent}")
     try:
         proposal = plan if plan is not None else plan_request(agent, request, memories, recent_conversation(db, session_id), db, knowledge)
-    except Exception:
-        db.execute("UPDATE task_runs SET status='planning_failed',completed_at=? WHERE id=?", (now(), task_id))
+    except Exception as exc:
+        db.execute("UPDATE task_runs SET status='planning_failed',error=?,completed_at=? WHERE id=?", (str(exc)[:2000], now(), task_id))
         db.commit()
         raise
     if not isinstance(proposal, dict) or proposal.get("mode") not in {"action", "conversation"} or not isinstance(proposal.get("actions"), list) or len(proposal["actions"]) > 12:
-        db.execute("UPDATE task_runs SET status='invalid_plan',completed_at=? WHERE id=?", (now(), task_id))
+        db.execute("UPDATE task_runs SET status='invalid_plan',error='Agent returned an invalid plan',completed_at=? WHERE id=?", (now(), task_id))
         db.commit()
         raise ValueError("Agent returned an invalid plan")
     db.execute("UPDATE task_runs SET mode=?,plan=?,status='running' WHERE id=?", (proposal["mode"], json.dumps(proposal, ensure_ascii=False), task_id))

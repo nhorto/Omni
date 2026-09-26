@@ -20,6 +20,8 @@ A synthetic reminder was scheduled in the local database. The running background
 
 Automated cases cover restart catch-up, no repeated delivery after completion, active-claim exclusion, retry limits, cancellation, midnight-spanning quiet hours, source-event deduplication, and proposal review. Memory tests include retrieving a matching passage far into a long note. Training export tests verify before/after desktop state and exclusion of unreviewed or incorrect tasks.
 
+Synthetic voice checks now cover a planning failure reaching Activity, an approval window closed before execution, and a completed review releasing the bridge while the app remains open. Live microphone and interruption behavior still needs hardware validation.
+
 ## Still awaiting live validation
 
 Microphone capture/continuous listening, the selected ElevenLabs voice, Outlook account access and calendar sync, and general visual/keyboard/mouse control across arbitrary apps. See ROADMAP.md for the full acceptance criteria.

@@ -98,9 +98,16 @@ def review_in_app(request: str, agent: str, plan: dict) -> None:
     omi.set_state("awaiting approval", agent, request[:120])
     command = [sys.executable, str(omi.ROOT / "omi_app.py"), "--review", str(path)]
     process = subprocess.Popen(command)
-    process.wait()
+    completion = path.with_suffix(".done")
+    while not completion.exists() and process.poll() is None:
+        time.sleep(0.1)
+    completion.unlink(missing_ok=True)
     if path.exists():
         path.unlink()
+        with omi.database() as db:
+            db.execute("INSERT INTO task_runs(source,request,agent,model,mode,plan,status,error,created_at,completed_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                       ("voice", request, agent, omi.selected_model(agent), plan.get("mode", "pending"), json.dumps(plan, ensure_ascii=False), "cancelled", "Review window closed before the request ran", omi.now(), omi.now()))
+            db.commit()
         omi.set_state("error", agent, "Approval window closed before review")
 
 
@@ -109,7 +116,13 @@ def process_request(text: str) -> None:
     omi.set_state("thinking", agent, text[:120])
     with omi.database() as db:
         memories = omi.relevant_memories(db, text)
-        plan = omi.plan_request(agent, text, memories, omi.recent_conversation(db), db)
+        try:
+            plan = omi.plan_request(agent, text, memories, omi.recent_conversation(db), db)
+            if not isinstance(plan, dict) or not isinstance(plan.get("actions"), list):
+                raise ValueError("Agent returned an invalid plan")
+        except Exception as exc:
+            omi.record_planning_failure(db, text, agent, "voice", exc)
+            raise
         if any(omi.needs_approval(action) for action in plan.get("actions", []) if isinstance(action, dict) and action.get("type") in omi.KINDS):
             review_in_app(text, agent, plan)
             return
