@@ -10,6 +10,7 @@ import assistant
 import browser
 import hypr
 import mail
+import research
 import voice_bridge
 
 
@@ -97,6 +98,29 @@ class OmiCoreTests(unittest.TestCase):
         self.assertEqual(assistant.local_plan("What time is it right now?")["mode"], "conversation")
         with patch.object(assistant, "installed_apps", return_value={"foot.desktop": "foot"}):
             self.assertEqual(assistant.local_plan("Open a terminal for me, please.")["actions"][0]["target"], "foot.desktop")
+
+    def test_score_question_researches_without_a_visible_browser(self):
+        request = "What are the college football scores today?"
+        with assistant.database() as db, patch.object(assistant, "plan_with_agent") as planner, patch.object(research, "search", return_value="Source: ESPN. Georgia 38, Oklahoma 6, fourth quarter") as search, patch.object(assistant, "answer_with_agent", return_value=("Georgia leads Oklahoma 38 to 6 in the fourth quarter, according to ESPN.", {})), patch.object(assistant, "speak_text") as speak, patch.object(browser, "open_url") as visible, contextlib.redirect_stdout(io.StringIO()):
+            assistant.run_request(request, "codex", db)
+        planner.assert_not_called()
+        search.assert_called_once_with(request.rstrip("?"))
+        visible.assert_not_called()
+        speak.assert_called_once()
+
+    def test_public_question_visible_browser_plan_is_replaced(self):
+        proposed = plan("conversation", {"type": "browser_open", "target": "https://example.com"}, {"type": "browser_read", "target": ""})
+        routed = assistant.normalize_research_plan("What's the latest sports news today?", proposed)
+        self.assertEqual([action["type"] for action in routed["actions"]], ["web_research"])
+        self.assertEqual([action["type"] for action in proposed["actions"]], ["browser_open", "browser_read"])
+        self.assertEqual(assistant.normalize_research_plan("Open a browser tab to ESPN and tell me the score", proposed), proposed)
+        self.assertEqual(assistant.normalize_research_plan("What is in my email today?", plan("conversation", reply="Sign in first"))["actions"], [])
+
+    def test_public_question_cannot_be_dismissed_as_no_live_access(self):
+        with assistant.database() as db, patch.object(assistant, "plan_with_agent", return_value=(plan("conversation", reply="I cannot check live scores"), {})):
+            routed = assistant.plan_request("codex", "Tell me the latest sports news today", [], [], db)
+        self.assertEqual(routed["actions"][0]["type"], "web_research")
+        self.assertEqual(routed["reply"], "")
 
     def test_harmless_terminal_commands_run_without_review(self):
         exercise = Path(self.temp.name) / "exercise.md"

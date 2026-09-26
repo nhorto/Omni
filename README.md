@@ -12,6 +12,7 @@ A personal desktop assistant for Omarchy Linux: describe what you want in text o
 - Separate Chromium profile for browser reading, clicks, and form input, plus accessible desktop controls and named text fields via AT-SPI. Local screen OCR can read visible text; it does not store the captured image or raw OCR in Activity.
 - Voxtype transcript intake, push-to-talk and continuous mode, a bar indicator and movable recording card. The indicator distinguishes Omi listening from text dictation. The Yealink SP92 was tested live on this development machine; other microphone setups still need validation.
 - Spoken answers to questions via local Piper or a configured ElevenLabs voice. Action requests stay quiet.
+- Public information questions research in the background and answer aloud without changing desktop windows. College football score questions read a headless ESPN scoreboard; other public searches use bounded search results. Say “open” or “show me the page” when you want a visible browser.
 - Persistent local reminders with quiet hours, retry handling, a review queue, and an app page.
 - Local action history with corrections, planning errors, cancelled voice reviews, terminal outcomes, and observed before/after desktop state. Only tasks reviewed as correct enter the candidate training export.
 - Outlook draft preparation and guarded web send adapter. Live account validation and durable mail/calendar sync are unfinished.
@@ -40,6 +41,8 @@ The installer backs up replaced integration files. It does not install packages 
 Suggested shortcuts are **Super+H** for the app, **Super+Shift+H** for one voice utterance, and **Super+Alt+H** for continuous listening. On Omarchy, **Super+Ctrl+X** is Voxtype dictation into the focused text field. Dictation does not send a request to Omi. The bar label and floating card distinguish the two recording modes; click the bar item for an action menu with voice, dictation, app, and settings controls. Check existing bindings before assigning them.
 
 Omi sends a spoken request automatically when recording finishes. Typed requests in the app use Send. Harmless desktop actions do not require confirmation; consequential actions open a review window. Settings offers automatic model choice or an explicit Codex model. Automatic choice currently uses GPT-6 Sol for requests needing an agent; exact local commands bypass the agent.
+
+A question such as “What are the college football scores today?” reads public information in the background and speaks a brief sourced answer. “Open the scores page in the browser” is a desktop action and opens the page. Search snippets can be stale; Omi should say when they do not establish an answer. Background research uses public web sites and still sends the retrieved text to the selected agent for a spoken summary.
 
 ## Try it without a microphone
 

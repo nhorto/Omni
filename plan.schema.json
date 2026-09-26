@@ -10,7 +10,7 @@
       "items": {
         "type": "object",
         "properties": {
-          "type": {"type": "string", "enum": ["open_app", "open_url", "list_files", "copy_file", "move_file", "trash_file", "run_command", "terminal_run", "remember", "recall", "browser_open", "browser_read", "browser_click", "browser_fill", "browser_back", "desktop_read", "desktop_click", "desktop_fill", "screen_read", "email_prepare", "email_send", "email_inbox", "workspace_switch", "window_move", "window_place", "window_focus", "window_shortcut", "reminder_add", "reminder_list", "reminder_cancel"]},
+          "type": {"type": "string", "enum": ["open_app", "open_url", "list_files", "copy_file", "move_file", "trash_file", "run_command", "terminal_run", "remember", "recall", "web_research", "browser_open", "browser_read", "browser_click", "browser_fill", "browser_back", "desktop_read", "desktop_click", "desktop_fill", "screen_read", "email_prepare", "email_send", "email_inbox", "workspace_switch", "window_move", "window_place", "window_focus", "window_shortcut", "reminder_add", "reminder_list", "reminder_cancel"]},
           "target": {"type": "string"},
           "destination": {"type": "string"},
           "content": {"type": "string"},
