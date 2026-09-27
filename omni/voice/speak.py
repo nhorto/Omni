@@ -78,9 +78,10 @@ def store_elevenlabs_key(value: str) -> None:
         raise RuntimeError("Could not save the key to the keyring")
 
 
-def player_argv() -> list[str] | None:
+def player_argv(target: str | None = None) -> list[str] | None:
     if shutil.which("mpv"):
-        return ["mpv", "--no-video", "--really-quiet", "--no-terminal", "--cache=no", "--demuxer-readahead-secs=0", "-"]
+        device = [f"--audio-device=pipewire/{target}"] if target else []
+        return ["mpv", "--no-video", "--really-quiet", "--no-terminal", "--cache=no", "--demuxer-readahead-secs=0", *device, "-"]
     if shutil.which("ffplay"):
         return ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", "-"]
     return None
@@ -194,7 +195,11 @@ class Speaker:
 
     def _play(self, synthesized, generation: int) -> None:
         kind, chunks = synthesized
-        argv = player_argv() if kind == "mp3" else (["pw-play", "-"] if shutil.which("pw-play") else player_argv())
+        target = self.settings.extra.get("speaker_target")
+        if kind == "wav" and shutil.which("pw-play"):
+            argv = ["pw-play", *([f"--target={target}"] if target else []), "-"]
+        else:
+            argv = player_argv(target)
         if not argv:
             raise RuntimeError("Install mpv to play speech")
         self._player = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

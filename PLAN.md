@@ -10,6 +10,30 @@ The same design is why Omni cannot grow: each new capability needs a schema entr
 
 Keep: `hypr.py`, `reminders.py`, the bar/indicator plugin, the privacy rules (data outside the checkout, private permissions, public-file check), and the idea of asking before consequential actions. Replace: the planner/broker loop, the file-polling voice bridge, the memory model, and the per-request subprocess model.
 
+## Build status (updated 2026-09-27)
+
+Built from a Mac without Omarchy, so everything Hyprland-, PipeWire-, and speaker-shaped is written but unverified. "Verified" below means run for real against codex-cli 0.157.1 on macOS; see [VALIDATION.md](VALIDATION.md) for timings.
+
+| Phase | State | Verified | Left to do on the Omarchy box |
+| --- | --- | --- | --- |
+| 0 Groundwork | Done. Tag `v0-planner`, `legacy/`, `omni/` package, `omnid`, `omni` CLI | Warm turn first token 0.8–1.0 s, "What is 17×23" end to end | Run `install.py --apply`, enable services, confirm the same timings on this CPU/network |
+| 1 Agent core + desktop tools + app | Done in code. Codex adapter, 35 tools, policy, libadwaita app and popover, bar plugin, Hyprland file | Scores via ESPN in one tool call; declined `rm -rf` left folder intact; allow/ask/deny policy tests; app rendered in two Omarchy themes; popover streamed a live answer | Every desktop tool against real Hyprland: the Phase 1 acceptance request (workspace 3, two terminals); `app_launch` detection and placement; `keys_send`/`type_text`; `screen_read`; the popover window rule; bar plugin loads in Quickshell; notify-send approval buttons |
+| 2 Voice | Done in code. Mic loop, wake word, push-to-talk, hands-free, barge-in, ElevenLabs streaming, Piper fallback | Wake word, capture, transcription (0.66–0.88 s), and barge-in on synthetic speech through a fake mic | Everything with a real mic and speakers: `pw-record --raw` flag, Yealink echo, ElevenLabs streaming with Nick's voice, first-audio timing, CPU at idle, the Phase 2 acceptance list, training the "Omni" wake word (docs/voice.md) |
+| 3 Memory + skills | Done. Stores, tools, inline saving, retirement + reflection, app pages, legacy migration | Fact saved mid-turn, reflection on retirement, fresh thread recalled it; unit tests | Run migration against Nick's real `~/.local/share/omi/memory.sqlite3`; check a skill appears after a repeated multi-step task |
+| 4 Delegation + Claude | Delegation done (visible terminal and background Codex). Claude adapter **not started** | Background agent fixed a bug in a scratch repo and reported back | Visible mode in Foot; Claude Agent SDK adapter behind the same tools and policy; adapter switch in Settings |
+| 5 Email | Not started | | Graph device-code sign-in and mail/calendar tools, per the Email section |
+
+Decisions made while building, which override the text further down where they differ:
+
+- **Tools are Codex dynamic tools, not an MCP server.** `thread/start` takes `dynamicTools`, and Codex calls them back over the same JSON-RPC pipe (`item/tool/call`). This needs no extra process or port. The Claude adapter should expose the same `omni.tools.REGISTRY` through the Agent SDK's in-process MCP server.
+- **Approvals go through `approvalPolicy: "untrusted"` with `sandbox: "danger-full-access"`.** Codex asks omnid about every non-trivial command and file change, and `policy.py` answers in microseconds. Nothing reaches Nick unless it is on the deny list.
+- **The model is picked at startup.** The first `*-luna` model in `model/list` (currently `gpt-6-luna`) for voice turns, CLI default for delegations. Override with `model` in `~/.config/omni/config.toml`.
+- **Voice libraries:** `pysilero-vad` (ONNX-free Silero, 512-sample chunks), `openwakeword` 0.6 (`Model(wakeword_models=[...], inference_framework="onnx")`), `faster-whisper` `base.en` int8.
+- **Speech is per-sentence HTTP streaming** to ElevenLabs (`/stream`, `eleven_flash_v2_5`) with one sentence of prefetch, not the WebSocket input stream. Switch only if first-audio misses 2.5 s because of it.
+- **The app is resident** (`omni-app.service`) so Super+H is a D-Bus call (`gapplication action dev.omni.Omni quick-ask`).
+
+**Next steps, in order:** (1) install on the Omarchy box and run the Phase 1 and Phase 2 acceptance lists, fixing what breaks and recording timings in VALIDATION.md; (2) train the Omni wake word; (3) Claude adapter; (4) email.
+
 ## Decisions (from Nick, 2026-09-27)
 
 | Area | Decision |
@@ -37,7 +61,7 @@ Keep: `hypr.py`, `reminders.py`, the bar/indicator plugin, the privacy rules (da
   │ session manager: one warm agent thread per adapter, compaction, budget         │
   │   ├─ Codex adapter: `codex app-server` child, JSON-RPC over stdio             │
   │   └─ Claude adapter: Claude Agent SDK (Python)                                │
-  │ tool server (MCP, in-process): desktop, windows, apps, terminal, browser,      │
+  │ tools (Codex dynamic tools, in-process): desktop, windows, apps, terminal,    │
   │   research, memory, skills, reminders, say/ask, delegate                       │
   │ policy: allow by default, deny list → approval via voice + notification + app  │
   │ memory: USER.md + MEMORY.md, episodes.sqlite (FTS5), skills/*.md              │
@@ -51,7 +75,7 @@ Keep: `hypr.py`, `reminders.py`, the bar/indicator plugin, the privacy rules (da
 
 **Language: Python.** GTK 4, AT-SPI, the Claude Agent SDK, faster-whisper, openWakeWord, and Silero VAD are all Python. The Codex app-server is plain JSON-RPC over stdio, so a ~200-line client is enough; do not take a dependency on the TypeScript SDK. If the app-server protocol proves too unstable, the fallback is `codex exec resume <thread>` per turn, which still keeps one thread and prompt cache but loses streaming granularity.
 
-**Layout.** Move the current tree to `legacy/` on day one so the old code is greppable but not importable, and tag it `v0-planner`. New package `omni/` with modules: `daemon`, `session` (adapters), `tools/` (one module per tool family), `policy`, `memory`, `voice/` (`wake`, `listen`, `speak`), `clients/` (`app`, `cli`, `socket`). `install.py`, the systemd unit, the plugin, and the launchers get renamed from `omi` to `omni`.
+**Layout.** Move the current tree to `legacy/` on day one so the old code is greppable but not importable, and tag it `v0-planner`. New package `omni/` with modules: `daemon`, `session`, `codex`, `tools/` (one module per tool family), `policy`, `memory`, `voice/` (`listen`, `speak`), `app/`, `cli`, `client`. `install.py`, the systemd unit, the plugin, and the launchers get renamed from `omi` to `omni`.
 
 ## Latency budget
 

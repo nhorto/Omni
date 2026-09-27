@@ -54,7 +54,8 @@ class Bridge:
                     GLib.idle_add(lambda: done(result) and False)
             except Exception as exc:
                 if failed:
-                    GLib.idle_add(lambda: failed(str(exc)) and False)
+                    message = str(exc)  # `exc` is cleared when the except block ends
+                    GLib.idle_add(lambda: failed(message) and False)
         threading.Thread(target=work, daemon=True).start()
 
     def ask(self, text: str, speak: bool, on_event: Callable[[dict], None], source: str = "app") -> None:
@@ -70,5 +71,6 @@ class Bridge:
                         else:
                             GLib.idle_add(lambda m=message: on_event(m) and False)
             except (DaemonUnavailable, ConnectionError, OSError) as exc:
-                GLib.idle_add(lambda: on_event({"event": "done", "ok": False, "error": str(exc)}) and False)
+                final = {"event": "done", "ok": False, "error": str(exc)}
+                GLib.idle_add(lambda: on_event(final) and False)
         threading.Thread(target=work, daemon=True).start()

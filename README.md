@@ -1,95 +1,56 @@
 # Omni
 
-A personal desktop assistant for Omarchy Linux: describe what you want in text or speech, let your signed-in agent plan it, and review consequential actions before they run.
+A personal assistant for Omarchy Linux that acts on your desktop. Ask by voice or text, and Omni opens and arranges windows, launches apps, types, runs commands, looks things up, remembers what matters, and hands big jobs to coding agents. It runs on your existing Codex (ChatGPT) sign-in.
 
-**A core rebuild is planned; read [PLAN.md](PLAN.md) first.** The notes below describe the current planner/broker build, which the plan replaces.
+**Status: rebuild in progress.** The design and phases are in [PLAN.md](PLAN.md), which also tracks what is built and what is left. The previous planner/broker build is in [`legacy/`](legacy/) (tag `v0-planner`).
 
-**Active development, not a completed release.** The assistant is currently called **Omi** in the app and commands. The public project is **Omni**. See [the roadmap](ROADMAP.md) for the full vision and remaining acceptance checks.
+## How it works
 
-## What works today
+`omnid` is one long-running user service. It keeps a warm Codex `app-server` thread, so a request streams its first words in about a second instead of spawning a fresh agent every time. Codex calls Omni's tools (windows, apps, terminals, typing, screen text, sports scores, web pages, reminders, memory, skills, delegation) and its own shell. Omni's policy lets ordinary work run without prompting and asks only before consequential commands: deleting outside safe folders, sudo, packages, `git push`, and system services.
 
-- Native GTK app with conversations, editable local memory, searchable knowledge notes, activity review, and settings.
-- Codex or Claude CLI adapters using their existing sign-in. Exact reminders, memories, workspace changes, URLs, and folder listings can run locally without an agent call; model overrides are available. Activity shows Codex token usage when its CLI reports it.
-- Workspace switching, exact existing-window focus, approved navigation shortcuts, window moves and placement, app/site launches, and visible terminals. A small set of harmless terminal commands runs directly; other commands require review.
-- Separate Chromium profile for browser reading, clicks, and form input, plus accessible desktop controls and named text fields via AT-SPI. Local screen OCR can read visible text; it does not store the captured image or raw OCR in Activity.
-- Voxtype transcript intake, push-to-talk and continuous mode, a bar indicator and movable recording card. The indicator distinguishes Omi listening from text dictation. The Yealink SP92 was tested live on this development machine; other microphone setups still need validation.
-- Spoken answers to questions via local Piper or a configured ElevenLabs voice. Action requests stay quiet.
-- Public information questions research in the background and answer aloud without changing desktop windows. College football score questions read a headless ESPN scoreboard; other public searches use bounded search results. Say “open” or “show me the page” when you want a visible browser.
-- Persistent local reminders with quiet hours, retry handling, a review queue, and an app page.
-- Local action history with corrections, planning errors, cancelled voice reviews, terminal outcomes, and observed before/after desktop state. Only tasks reviewed as correct enter the candidate training export.
-- Outlook draft preparation and guarded web send adapter. Live account validation and durable mail/calendar sync are unfinished.
+Voice runs locally. A wake word or hotkey starts listening, Silero VAD finds the end of the utterance, and faster-whisper transcribes it. Answers stream to ElevenLabs sentence by sentence. Talking over Omni stops it. After actions Omni stays quiet unless it has a question.
 
-Desktop plans stop at a failed or declined step. Visible terminal commands start in a pending state; the background service records their exit code and up to 4,000 trailing output characters when they finish, including after a restart. A running command is not eligible for reviewed training export. General visual computer use, notification triage beyond local reminders, and Outlook monitoring are under development.
+Memory grows by itself. Omni saves facts about you to `USER.md` and its own lessons to `MEMORY.md`, logs every turn to a searchable episode database, and writes reusable skills after multi-step tasks that worked. Everything is plain files under `~/.local/share/omni/`, viewable and editable in the app.
 
-## Setup
-
-The desktop target is Omarchy with Hyprland's Lua dispatcher interface. Other Hyprland versions are not yet supported. Required components include Python 3.10+, PyGObject with GTK 4 and AT-SPI bindings, Foot, and a signed-in Codex or Claude CLI. Optional features need Voxtype/PipeWire, Piper plus `pw-play`, Playwright CLI plus Chromium, or Secret Service's `secret-tool` for ElevenLabs.
+## Install (Omarchy)
 
 ```bash
-git clone https://github.com/nhorto/Omni.git
-cd Omni
-./launch.sh
+git clone https://github.com/nhorto/Omni.git ~/Documents/Omni
+cd ~/Documents/Omni
+sudo pacman -S --needed python-gobject gtk4 libadwaita mpv wtype grim tesseract tesseract-data-eng foot libnotify libsecret
+python3 install.py            # preview
+python3 install.py --apply    # venv, launchers, services, bar plugin, Hyprland file
 ```
 
-Preview or install user launchers, desktop entry, service, and Omarchy plugin:
+Then follow the printed steps: add `require("hypr.omni")` to `~/.config/hypr/hyprland.lua`, enable `omnid.service` and `omni-app.service`, store the ElevenLabs key with `omni key elevenlabs`, and run `omni doctor`.
 
-```bash
-python3 install.py
-python3 install.py --apply
-```
-
-The installer backs up replaced integration files. It does not install packages or change shortcuts. Follow [integration setup](integration/README.md) to enable the service and recording indicators. Keep the checkout in place; installed launchers refer to it.
-
-Suggested shortcuts are **Super+H** for the app, **Super+Shift+H** for one voice utterance, and **Super+Alt+H** for continuous listening. On Omarchy, **Super+Ctrl+X** is Voxtype dictation into the focused text field. Dictation does not send a request to Omi. The bar label and floating card distinguish the two recording modes; click the bar item for an action menu with voice, dictation, app, and settings controls. Check existing bindings before assigning them.
-
-Omi sends a spoken request automatically when recording finishes. Typed requests in the app use Send. Harmless desktop actions do not require confirmation; consequential actions open a review window. Settings offers automatic model choice or an explicit Codex model. Automatic choice currently uses GPT-6 Sol for requests needing an agent; exact local commands bypass the agent.
-
-A question such as “What are the college football scores today?” reads public information in the background and speaks a brief sourced answer. “Open the scores page in the browser” is a desktop action and opens the page. Search snippets can be stale; Omi should say when they do not establish an answer. Background research uses public web sites and still sends the retrieved text to the selected agent for a spoken summary.
-
-## Try it without a microphone
-
-Type in the app, or use the same transcript queue as voice after enabling the service:
-
-```bash
-python3 voice_bridge.py inject "Open the file manager"
-python3 voice_bridge.py status
-python3 assistant.py ask "Go to workspace 3"
-python3 assistant.py ask "Remember that I prefer concise replies"
-python3 assistant.py doctor
-```
-
-For a desktop workflow, try: “Go to workspace 3, open a terminal on the left and run pwd, then open another terminal on the right and run date.” Commands outside the small read-only allowlist require approval. New-window placement stops if the target cannot be identified uniquely.
-
-Use Settings to check setup and choose an available agent and model. Conversation threads provide bounded follow-up context; desktop commands go into Activity. Add project context under Knowledge, and edit background and tone under Profile.
-
-## Reminders
-
-Say or type “Remind me in 15 minutes to take a break.” This exact form uses no model call. The Reminders page also schedules and cancels local reminders. Settings can hold notifications during quiet hours. The background service catches up after restart and retries transient delivery failures; reminders still failing after five attempts remain visible as failed.
-
-Suggestions from future intake adapters remain proposed until reviewed. No email monitoring or automatic calendar writes are active. Delivery is durable but not exactly once: a crash after the notification daemon accepts a message and before SQLite records it can result in a retry. These reminders currently use desktop notifications, not spoken interruptions.
-
-## Privacy and public source
-
-The repository contains code, generic examples, and synthetic tests. Personal data lives outside the checkout:
-
-| Data | Local location |
+| Keys | What |
 | --- | --- |
-| Memories, conversations, action history, knowledge | `~/.local/share/omi/memory.sqlite3` |
-| Settings, profile, personality | `~/.config/omi/` |
-| Browser sign-in and output | `~/.local/share/omi/browser-profile/` and `browser-output/` |
-| Temporary recordings/transcripts and state | `$XDG_RUNTIME_DIR/omi/` |
-| ElevenLabs API key | Local Secret Service keyring |
+| Super+H | Quick ask popover |
+| Super+Shift+H | Talk (press again to send early) |
+| Super+Alt+H | Hands-free listening on/off |
+| Super+Ctrl+H | Stop speaking and interrupt |
 
-Local storage does not mean local inference: the selected agent receives the request and relevant context. ElevenLabs receives spoken text when selected. Exports can contain personal data; do not commit them. The repository ignore rules and [public-file check](scripts/check_public.py) help catch accidental additions, but are not a guarantee of redaction.
+The default wake word is "hey Jarvis" until a custom "Omni" model is trained; see [docs/voice.md](docs/voice.md).
 
-Use Activity to mark a task correct or record a correction. Full history retains failures; reviewed training export excludes them. Versioned exports now include observed window state before and after desktop tasks. This produces a candidate dataset, not a trained local model.
+## From a terminal
+
+```bash
+omni ask "put a terminal on the left running htop and files on the right"
+omni ask --speak "how did Tennessee do yesterday"
+omni status · omni doctor · omni new · omni stop · omni memory · omni memory search printer
+```
+
+## Privacy
+
+Personal data lives outside the checkout, with private permissions: memory and episodes in `~/.local/share/omni/`, settings and `policy.toml` in `~/.config/omni/`, and the ElevenLabs key in the Secret Service keyring. Audio stays local; only transcripts go to the agent. Omni cannot change its own memory database, service, or credentials through the shell. `scripts/check_public.py` blocks accidental commits of private files.
 
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -v
+python3 -m unittest discover -s tests
 python3 scripts/check_public.py
-git diff --check
+OMNI_DATA=/tmp/o/data OMNI_CONFIG=/tmp/o/config OMNI_RUNTIME=/tmp/o/run python3 -m omni.daemon -v   # isolated daemon
 ```
 
-Tests use temporary data and synthetic fixtures. Live desktop checks require a graphical session and are kept separate. See [SPEC.md](SPEC.md), [ROADMAP.md](ROADMAP.md), and [CONTRIBUTING.md](CONTRIBUTING.md).
+See [AGENTS.md](AGENTS.md) for the code map and conventions.

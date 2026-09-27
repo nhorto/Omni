@@ -62,7 +62,8 @@ class VoiceLoop:
         self._capturing = False
         self._transcriber = ThreadPoolExecutor(1, thread_name_prefix="whisper")
         self.vad = SileroVoiceActivityDetector()
-        self.wake = WakeModel(wakeword_models=[settings.wake_model], inference_framework="onnx") if settings.wake_word else None
+        wake_model = str(Path(settings.wake_model).expanduser()) if "/" in settings.wake_model else settings.wake_model
+        self.wake = WakeModel(wakeword_models=[wake_model], inference_framework="onnx") if settings.wake_word else None
         self.whisper: WhisperModel | None = None
         self.mic: subprocess.Popen | None = None
         self.last_error = ""
