@@ -2,6 +2,8 @@
 
 A personal desktop assistant for Omarchy Linux: describe what you want in text or speech, let your signed-in agent plan it, and review consequential actions before they run.
 
+**A core rebuild is planned; read [PLAN.md](PLAN.md) first.** The notes below describe the current planner/broker build, which the plan replaces.
+
 **Active development, not a completed release.** The assistant is currently called **Omi** in the app and commands. The public project is **Omni**. See [the roadmap](ROADMAP.md) for the full vision and remaining acceptance checks.
 
 ## What works today
