@@ -203,6 +203,11 @@ class Daemon:
         return True
 
     async def _notify_prompt(self, ident: str, kind: str, text: str) -> None:
+        # Mako (Omarchy's notifier) does not draw action buttons, so also raise the popover,
+        # whose approval card has Approve/Cancel. A no-op if the app is not running.
+        if shutil.which("gapplication"):
+            subprocess.Popen(["gapplication", "action", "dev.omni.Omni", "quick-ask"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if not shutil.which("notify-send"):
             return
         argv = ["notify-send", "--app-name=Omni", "--urgency=critical", f"--expire-time={PROMPT_TIMEOUT * 1000}", "--wait"]

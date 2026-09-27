@@ -7,7 +7,8 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
+import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -24,7 +25,9 @@ SYSTEM_PACKAGES = {"python-gobject": "gi", "gtk4": None, "libadwaita": None, "mp
 
 
 def launcher(module: str) -> str:
-    return (f"#!/bin/sh\nexport PYTHONPATH={ROOT}${{PYTHONPATH:+:$PYTHONPATH}}\n"
+    # systemd user services get a minimal PATH; keep the one codex, claude, and omarchy-* were found on.
+    path = os.environ.get("PATH", "/usr/local/bin:/usr/bin")
+    return (f"#!/bin/sh\nexport PATH={shlex.quote(path)}\nexport PYTHONPATH={ROOT}${{PYTHONPATH:+:$PYTHONPATH}}\n"
             f"exec {VENV / 'bin/python'} -m {module} \"$@\"\n")
 
 

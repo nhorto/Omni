@@ -60,6 +60,7 @@ class VoiceLoop:
         self._stop_capture = threading.Event()
         self._once: asyncio.Future | None = None
         self._capturing = False
+        self._purpose = "request"
         self._transcriber = ThreadPoolExecutor(1, thread_name_prefix="whisper")
         self.vad = SileroVoiceActivityDetector()
         wake_model = str(Path(settings.wake_model).expanduser()) if "/" in settings.wake_model else settings.wake_model
@@ -94,6 +95,8 @@ class VoiceLoop:
             return ""
         finally:
             self._once = None
+            if self._capturing and self._purpose == "answer":
+                self._stop_capture.set()  # answered another way (click); drop what the mic is still hearing
 
     def describe(self) -> dict:
         return {"available": True, "wake": self.wake_enabled, "wake_model": self.settings.wake_model,
@@ -176,6 +179,7 @@ class VoiceLoop:
             if trigger:
                 log.info("listening (%s)", trigger)
                 keep = list(preroll) if trigger in ("barge-in", "continuous") else []
+                self._purpose = "answer" if self._once is not None else "request"
                 self._capture(keep, heard_speech=trigger in ("barge-in", "continuous"))
                 preroll.clear()
                 wake_buffer.clear()
@@ -208,7 +212,7 @@ class VoiceLoop:
         self._capturing = False
         self.loop.call_soon_threadsafe(self.daemon.set_listening, False)
         if audio:
-            self._transcriber.submit(self._finish, bytes(audio), ended)
+            self._transcriber.submit(self._finish, bytes(audio), ended, self._purpose)
         elif self._once and not self._once.done():
             self.loop.call_soon_threadsafe(self._resolve_once, "")
 
@@ -221,11 +225,11 @@ class VoiceLoop:
                 return
             yield data
 
-    def _finish(self, audio: bytes, ended: float) -> None:
+    def _finish(self, audio: bytes, ended: float, purpose: str) -> None:
         text = self.transcribe(audio)
         log.info("heard %r in %.2fs", text, time.monotonic() - ended)
-        if self._once is not None and not self._once.done():
-            self.loop.call_soon_threadsafe(self._resolve_once, text)
+        if purpose == "answer":
+            self.loop.call_soon_threadsafe(self._resolve_once, text)  # dropped if already answered
             return
         text = WAKE_PHRASES.sub("", text).strip()
         if len(text) < 2:
