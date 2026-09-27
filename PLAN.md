@@ -99,6 +99,21 @@ Approval is spoken and visual at once: Omni says the one-line summary and asks; 
 - **Barge-in**: while speaking, keep VAD on the mic. Speech detected → stop playback, send `turn/interrupt` to the app-server, start listening. Enable PipeWire's echo-cancel module (`libpipewire-module-echo-cancel`) so Omni's own voice does not trigger VAD; verify with the Yealink SP92, which has hardware echo cancellation and may make this unnecessary.
 - **Indicator**: keep the bar item and floating card. States: idle, listening, thinking, working, speaking, awaiting approval. The daemon writes `status.json`; nothing else does.
 
+## The app
+
+Nick's verdict on the current GTK app: it looks bad and works worse. It is one `Gtk.TextView` dumping "YOU / OMI" blocks, hand-written CSS with hard-coded navy hex values that ignore the Omarchy theme, seven sidebar buttons, and every list rebuilt from scratch on a 3–5 s timer. Rebuild it, do not restyle it.
+
+- **Two surfaces, not one.** A small *quick ask* popover on `Super+H`: a single input, the streaming reply, the current listening/speaking state, and nothing else. It closes on Escape or when the reply is spoken. The *full window* is for browsing history, memory, skills, activity, and settings. Most days Nick should only see the popover.
+- **Native and themed.** GTK 4 with libadwaita widgets (`AdwNavigationSplitView`, `AdwPreferencesPage`, `AdwActionRow`, toasts, status pages) so it looks like an Omarchy app rather than a custom skin. Read colors from Omarchy's current theme (`~/.config/omarchy/current/theme/`) and map them onto the libadwaita accent and background variables so Omni changes when the theme changes. No hard-coded palette anywhere.
+- **Conversation view.** Real message rows (user, Omni, tool activity collapsed by default), streaming text that appears as tokens arrive, a spoken/typed indicator per turn, and inline approval cards when a request needs one. Threads listed by day, since threads now retire on a schedule.
+- **Memory pages.** USER.md and MEMORY.md as editable documents with per-entry provenance shown on hover; skills as a list with an editor; episodes as a searchable timeline. Delete is one click with undo via toast.
+- **Activity.** Per turn: request, timings for each latency stage, tokens, tools called, and any delegation still running with a Stop button. Today's token total and budget bar live at the top.
+- **Settings.** Grouped preference pages: Agent (Codex/Claude, model, budget), Voice (wake word on/off, ElevenLabs voice, Piper fallback, speak-answers toggle), Policy (the deny list, editable), Email. A "Check setup" status page replaces the wall of text.
+- **Live updates, not polling.** The app subscribes to `omnid` over the socket and updates rows in place. No `timeout_add` refreshers, no full list rebuilds.
+- **Floating card and bar item.** Keep them in Quickshell, restyle to the same theme tokens, and make the card show the live transcript while listening and the current sentence while speaking.
+
+Acceptance: the app passes a side-by-side with a stock Omarchy app in three themes without looking foreign; the popover appears within 150 ms of the hotkey; a streaming reply renders without visible frame drops.
+
 ## Memory: grow with Nick
 
 Hermes-shaped, three stores, all under `~/.local/share/omni/`, all shown in the app.
@@ -137,11 +152,11 @@ Each phase ends with live checks on the Omarchy machine, recorded in `VALIDATION
 
 **Phase 0 — Groundwork (half a day).** Tag `v0-planner`, move current code to `legacy/`, scaffold `omni/`, `omnid` socket server, `omni` CLI that sends a text request and prints the streamed reply. Verify `codex app-server` starts under the installed CLI version and authenticates with the ChatGPT login. Done when `omni ask "what time is it"` streams a reply in under 2 s on a warm thread.
 
-**Phase 1 — Agent core and desktop tools.** Codex adapter, MCP tool server with desktop/terminal/browser/research/reminders tools, policy engine with the deny list, GTK app talking to the socket (Conversation, Activity, Settings pages first). Acceptance: "Go to workspace 3, open a terminal on the left and run pwd, and another on the right and run date" completes in under 6 s with no prompts; "What are the college football scores today" speaks a sourced answer in under 5 s; "Delete everything in my Downloads folder" asks first and cancel leaves the folder untouched.
+**Phase 1 — Agent core and desktop tools.** Codex adapter, MCP tool server with desktop/terminal/browser/research/reminders tools, policy engine with the deny list, and the new libadwaita app talking to the socket (quick-ask popover, Conversation, Activity, Settings first; see The app). Acceptance: "Go to workspace 3, open a terminal on the left and run pwd, and another on the right and run date" completes in under 6 s with no prompts; "What are the college football scores today" speaks a sourced answer in under 5 s; "Delete everything in my Downloads folder" asks first and cancel leaves the folder untouched.
 
 **Phase 2 — Voice.** Mic pipeline, wake word, streaming ElevenLabs, barge-in, indicator states. Acceptance: "Omni, open Files" opens Files with no spoken reply; "Omni, what's the weather tomorrow" starts speaking within 2.5 s of Nick finishing; talking over the answer stops it within 300 ms and the new request is handled; dictation via Voxtype still types into the focused app and never reaches Omni.
 
-**Phase 3 — Memory and skills.** Three stores, tools, inline saving, thread retirement with reflection, app pages for USER/MEMORY/skills/episodes with edit and delete, migration from the old tables. Acceptance: tell Omni a fact in one thread, retire the thread, recall it in the next; complete a three-step task twice and see a skill appear after the first; "forget that" removes it and recall no longer returns it.
+**Phase 3 — Memory and skills.** Three stores, tools, inline saving, thread retirement with reflection, the Memory pages in the app (USER/MEMORY/skills/episodes with edit, delete, undo), migration from the old tables. Acceptance: tell Omni a fact in one thread, retire the thread, recall it in the next; complete a three-step task twice and see a skill appear after the first; "forget that" removes it and recall no longer returns it.
 
 **Phase 4 — Delegation and Claude adapter.** `delegate` in both modes, Claude Agent SDK adapter sharing the same tool server and memory, adapter switch in Settings. Acceptance: "Fix the failing test in ~/Documents/cork-and-note in a terminal" opens a visible Codex session there; "in the background, summarize the last ten commits in that repo" produces a spoken summary and a report file; switching to Claude keeps memory and skills.
 
