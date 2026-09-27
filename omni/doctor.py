@@ -40,7 +40,7 @@ def checks() -> list[tuple[str, str, str]]:
                    settings.elevenlabs_voice_id or "set elevenlabs_voice_id in ~/.config/omni/config.toml"))
     for module, purpose in (("numpy", "Audio math (numpy)"), ("openwakeword", "Wake word (openWakeWord)"),
                             ("faster_whisper", "Local transcription (faster-whisper)"), ("pysilero_vad", "Voice activity (Silero VAD)"),
-                            ("gi", "GTK app (PyGObject)")):
+                            ("gi", "GTK app (PyGObject)"), ("claude_agent_sdk", "Claude adapter (claude-agent-sdk)")):
         present = importlib.util.find_spec(module) is not None
         result.append((purpose, "ok" if present else "warn", "installed" if present else f"pip install {module.replace('_', '-')}"))
     result.append(("Data folder", "ok", str(config.DATA)))

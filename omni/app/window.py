@@ -450,7 +450,12 @@ class SettingsPage(Gtk.Box):
         self.bridge.call("settings.set", key=key, value=value, failed=self.window.toast)
 
     def _build(self, s: dict) -> None:
-        agent = Adw.PreferencesGroup(title="Agent", description="Codex runs Omni on your ChatGPT sign-in")
+        agent = Adw.PreferencesGroup(title="Agent", description="Runs on your ChatGPT (Codex) or Claude sign-in; memory and skills are shared")
+        agents = ["codex", "claude"]
+        which = Adw.ComboRow(title="Assistant", model=Gtk.StringList.new(["Codex (ChatGPT)", "Claude"]),
+                             selected=agents.index(s["agent"]) if s["agent"] in agents else 0)
+        which.connect("notify::selected", lambda row, _p: self._set("agent", agents[row.get_selected()]))
+        agent.add(which)
         model = Adw.EntryRow(title="Model (blank = fastest available)", text=s["model"] or "", show_apply_button=True)
         model.connect("apply", lambda row: self._set("model", row.get_text().strip() or None))
         efforts = ["low", "medium", "high"]

@@ -85,6 +85,9 @@ class Runner:
             self.last_used = time.time()
         return turn
 
+    async def close(self) -> None:
+        await self.session.codex.archive(self.thread_id)
+
     async def interrupt(self) -> None:
         turn = self.turn
         if turn and turn.turn_id and not turn.done.done():
@@ -259,10 +262,17 @@ class Session:
         self.tools = tools.load_all()
         self.loop: asyncio.AbstractEventLoop | None = None
         self.current: Turn | None = None
+        self.foreground_lock = asyncio.Lock()
 
     async def start(self) -> None:
         self.loop = asyncio.get_running_loop()
-        await self.codex.start()
+        try:
+            await self.codex.start()
+        except (OSError, CodexError, asyncio.TimeoutError) as exc:
+            if self.settings.agent != "claude":
+                raise
+            log.warning("codex app-server unavailable (%s); running on Claude only", exc)
+            return
         if not self.model:
             self.model = pick_fast_model(await self.codex.models())
         try:
@@ -297,8 +307,18 @@ class Session:
             params["dynamicTools"] = [t.spec() for t in self.tools.values()]
         return await self.codex.start_thread(**params)
 
+    async def warm(self) -> None:
+        """Open the foreground conversation before the first request so it pays no startup cost."""
+        try:
+            await self._foreground()
+        except Exception as exc:
+            log.warning("could not pre-warm the %s session: %s", self.settings.agent, exc)
+
     async def _foreground(self) -> Runner:
-        await self._ensure_codex()
+        async with self.foreground_lock:
+            return await self._foreground_locked()
+
+    async def _foreground_locked(self) -> Runner:
         runner = self.runner
         if runner and self._should_retire(runner):
             self.runner = None
@@ -306,9 +326,22 @@ class Session:
             runner = None
         if runner is None:
             instructions = prompt.developer_instructions(self.memory.prompt_block(), self.memory.skills())
-            thread_id = await self.new_thread(instructions=instructions, cwd=str(Path.home()), model=self.model)
-            runner = self.runner = Runner(self, thread_id, kind="foreground", cwd=str(Path.home()))
-            self.emit({"event": "thread", "thread_id": thread_id})
+            home = str(Path.home())
+            if self.settings.agent == "claude":
+                runner = await self.claude_runner(kind="foreground", cwd=home, instructions=instructions,
+                                                  model=self.settings.extra.get("claude_model"), effort=self.settings.effort)
+            else:
+                await self._ensure_codex()
+                thread_id = await self.new_thread(instructions=instructions, cwd=home, model=self.model)
+                runner = Runner(self, thread_id, kind="foreground", cwd=home)
+            self.runner = runner
+            self.emit({"event": "thread", "thread_id": runner.thread_id, "agent": self.settings.agent})
+        return runner
+
+    async def claude_runner(self, **options):
+        from .claude import ClaudeRunner  # optional dependency: claude-agent-sdk
+        runner = ClaudeRunner(self, **options)
+        await runner.start()
         return runner
 
     def _should_retire(self, runner: Runner) -> bool:
@@ -322,6 +355,7 @@ class Session:
         if self.runner:
             runner, self.runner = self.runner, None
             asyncio.create_task(self._retire(runner))
+        asyncio.create_task(self.warm())
 
     async def _retire(self, runner: Runner) -> None:
         episode = self.memory.start_episode("(reflection before closing the conversation)", source="system", kind="reflection",
@@ -332,7 +366,7 @@ class Session:
         finally:
             self.memory.finish_episode(episode, reply=turn.text, tools=turn.tools, timings=turn.timings,
                                        status=turn.status, tokens=turn.tokens)
-            await self.codex.archive(runner.thread_id)
+            await runner.close()
 
     async def ask(self, text: str, *, source: str = "text", speak: bool | None = None, t0: float | None = None,
                   ref: str | None = None) -> dict:
@@ -345,7 +379,7 @@ class Session:
             speak = self.settings.speech if speak is None else speak
             if self.speaker:
                 self.speaker.stop()
-            episode = self.memory.start_episode(text, source=source, agent="codex")
+            episode = self.memory.start_episode(text, source=source, agent=self.settings.agent)
             turn = Turn(text, source, episode, SpeechGate(self.speaker, speak), t0 or time.monotonic())
             self.current = turn
             self.emit({"event": "turn.started", "episode": episode, "request": text, "source": source, "speak": speak, "ref": ref})
@@ -438,13 +472,15 @@ class Session:
                                            command, True, None, None, True)
             item.handle = info["handle"]
             asyncio.create_task(self._watch_visible(item))
-        elif agent == "codex":
+        elif agent == "claude":
+            item.runner = await self.claude_runner(kind="delegation", cwd=directory, instructions=prompt.SUBAGENT,
+                                                   with_tools=False, effort="medium")
+            asyncio.create_task(self._run_background(item, parent))
+        else:
+            await self._ensure_codex()
             thread_id = await self.new_thread(instructions=prompt.SUBAGENT, cwd=directory, model=None, dynamic_tools=False)
             item.runner = Runner(self, thread_id, kind="delegation", cwd=directory)
             asyncio.create_task(self._run_background(item, parent))
-        else:
-            item.status = "failed"
-            return {"error": "Background Claude delegation arrives with the Claude adapter (PLAN.md Phase 4); use codex or visible mode."}
         self.emit({"event": "delegation", **item.public()})
         return {"id": ident, "mode": mode, "status": "started",
                 "note": "Omni will announce when it finishes." if mode == "background" else "Opened a terminal Nick can watch."}
@@ -466,7 +502,7 @@ class Session:
             path.write_text(f"# {item.task}\n\n{text}\n")
             item.report = str(path)
         self.memory.finish_episode(episode, reply=text, tools=turn.tools, timings=turn.timings, status=turn.status, tokens=turn.tokens)
-        await self.codex.archive(item.runner.thread_id)
+        await item.runner.close()
         self.emit({"event": "delegation", **item.public()})
         if self.speaker and self.settings.speech:
             self.speaker.say(f"Background task finished. {item.summary}" if item.status == "done"

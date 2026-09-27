@@ -71,13 +71,9 @@ def save_setting(key: str, value, path: Path | None = None) -> None:
     path = path or CONFIG / "config.toml"
     private_dir(path.parent)
     lines = path.read_text().splitlines() if path.is_file() else []
-    rendered = f"{key} = {_toml(value)}"
-    for index, line in enumerate(lines):
-        if line.split("=", 1)[0].strip() == key:
-            lines[index] = rendered
-            break
-    else:
-        lines.append(rendered)
+    lines = [line for line in lines if line.split("=", 1)[0].strip() != key]
+    if value is not None:  # None removes the key, restoring the default
+        lines.append(f"{key} = {_toml(value)}")
     path.write_text("\n".join(lines) + "\n")
     path.chmod(0o600)
 

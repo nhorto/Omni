@@ -58,6 +58,7 @@ class Daemon:
         self.speaker.start()
         self.session = Session(self.settings, self.memory, self.policy, self.emit, self.prompt, self.speaker)
         await self.session.start()
+        asyncio.create_task(self.session.warm())
         self._start_voice()
         if config.SOCKET.exists():
             config.SOCKET.unlink()
@@ -157,7 +158,7 @@ class Daemon:
         if state == self.last_state and state not in ("working", "listening"):
             return
         self.last_state = state
-        payload = {"state": state, "detail": self.detail, "agent": "codex", "updated_at": time.time(),
+        payload = {"state": state, "detail": self.detail, "agent": self.settings.agent, "updated_at": time.time(),
                    "continuous": bool(self.voice and self.voice.continuous), "wake": bool(self.voice and self.voice.wake_enabled)}
         if state == "idle":
             payload["tokens_today"] = self.memory.tokens_today()["billable"]
@@ -277,7 +278,9 @@ class Daemon:
             await send({"id": ident, "ok": False, "error": f"{type(exc).__name__}: {exc}"})
 
     def status(self) -> dict:
-        return {"state": self.state(), "model": self.session.model if self.session else None,
+        return {"state": self.state(), "agent": self.settings.agent,
+                "model": (self.settings.extra.get("claude_model") or "default") if self.settings.agent == "claude"
+                else self.session.model if self.session else None,
                 "thread": self.session.runner.thread_id if self.session and self.session.runner else None,
                 "context_tokens": self.session.runner.context_tokens if self.session and self.session.runner else 0,
                 "tokens_today": self.memory.tokens_today(), "budget": self.settings.daily_token_budget,
@@ -459,10 +462,14 @@ async def op_settings_set(daemon, request, send):
     key, value = request["key"], request["value"]
     if key not in daemon.settings.__dataclass_fields__ or key == "extra":
         raise KeyError(f"Unknown setting {key}")
+    if key == "agent" and value not in ("codex", "claude"):
+        raise ValueError("agent must be codex or claude")
     setattr(daemon.settings, key, value)
     config.save_setting(key, value)
     if key == "model":
         daemon.session.model = value or daemon.session.model
+    if key == "agent":
+        await daemon.session.retire()  # the next request starts on the new adapter; memory carries over
     return True
 
 

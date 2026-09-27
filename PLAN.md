@@ -20,7 +20,7 @@ Built from a Mac without Omarchy, so everything Hyprland-, PipeWire-, and speake
 | 1 Agent core + desktop tools + app | Done in code. Codex adapter, 35 tools, policy, libadwaita app and popover, bar plugin, Hyprland file | Scores via ESPN in one tool call; declined `rm -rf` left folder intact; allow/ask/deny policy tests; app rendered in two Omarchy themes; popover streamed a live answer | Every desktop tool against real Hyprland: the Phase 1 acceptance request (workspace 3, two terminals); `app_launch` detection and placement; `keys_send`/`type_text`; `screen_read`; the popover window rule; bar plugin loads in Quickshell; notify-send approval buttons |
 | 2 Voice | Done in code. Mic loop, wake word, push-to-talk, hands-free, barge-in, ElevenLabs streaming, Piper fallback | Wake word, capture, transcription (0.66–0.88 s), and barge-in on synthetic speech through a fake mic | Everything with a real mic and speakers: `pw-record --raw` flag, Yealink echo, ElevenLabs streaming with Nick's voice, first-audio timing, CPU at idle, the Phase 2 acceptance list, training the "Omni" wake word (docs/voice.md) |
 | 3 Memory + skills | Done. Stores, tools, inline saving, retirement + reflection, app pages, legacy migration | Fact saved mid-turn, reflection on retirement, fresh thread recalled it; unit tests | Run migration against Nick's real `~/.local/share/omi/memory.sqlite3`; check a skill appears after a repeated multi-step task |
-| 4 Delegation + Claude | Delegation done (visible terminal and background Codex). Claude adapter **not started** | Background agent fixed a bug in a scratch repo and reported back | Visible mode in Foot; Claude Agent SDK adapter behind the same tools and policy; adapter switch in Settings |
+| 4 Delegation + Claude | Done in code. Delegation (visible terminal; background Codex or Claude). Claude Agent SDK adapter (`omni/claude.py`) with the same tools (in-process MCP), policy (`can_use_tool`), memory, and skills (local plugin); Assistant switch in Settings | Background Codex and background Claude agents each fixed a bug in a scratch repo and reported back; Claude as the assistant saved a fact via the tools, answered scores from ESPN, first token 1.2 s warm | Visible mode in Foot; Phase 4 acceptance list; check Claude's user settings allow rules do not pre-approve anything on the deny list (they bypass `can_use_tool`) |
 | 5 Email | Not started | | Graph device-code sign-in and mail/calendar tools, per the Email section |
 
 Decisions made while building, which override the text further down where they differ:
@@ -32,7 +32,10 @@ Decisions made while building, which override the text further down where they d
 - **Speech is per-sentence HTTP streaming** to ElevenLabs (`/stream`, `eleven_flash_v2_5`) with one sentence of prefetch, not the WebSocket input stream. Switch only if first-audio misses 2.5 s because of it.
 - **The app is resident** (`omni-app.service`) so Super+H is a D-Bus call (`gapplication action dev.omni.Omni quick-ask`).
 
-**Next steps, in order:** (1) install on the Omarchy box and run the Phase 1 and Phase 2 acceptance lists, fixing what breaks and recording timings in VALIDATION.md; (2) train the Omni wake word; (3) Claude adapter; (4) email.
+- **Claude runs with `ENABLE_TOOL_SEARCH=false`** so Omni's tools are called directly instead of through a deferred-tool search round trip. Its sessions load user settings (`setting_sources=["user"]`) so the Omarchy skill is available; permission allow rules there skip Omni's policy.
+- **Both adapters pre-warm** the foreground conversation when omnid starts.
+
+**Next steps, in order:** (1) install on the Omarchy box and run the Phase 1 and Phase 2 acceptance lists, fixing what breaks and recording timings in VALIDATION.md; (2) train the Omni wake word; (3) email.
 
 ## Decisions (from Nick, 2026-09-27)
 

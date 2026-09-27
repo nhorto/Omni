@@ -4,3 +4,5 @@ openwakeword>=0.6
 pysilero-vad>=2.0
 faster-whisper>=1.1
 # The app uses the system PyGObject/GTK 4/libadwaita (pacman: python-gobject gtk4 libadwaita).
+# Claude as the assistant or for delegated work (optional; Codex needs nothing extra).
+claude-agent-sdk>=0.2
