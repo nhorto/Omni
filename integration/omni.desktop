@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Omni
+Comment=Your desktop assistant
+Exec=@OMNI_LAUNCHER@ app
+Icon=@OMNI_ICON@
+Terminal=false
+Categories=Utility;
+StartupWMClass=dev.omni.Omni

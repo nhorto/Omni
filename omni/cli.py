@@ -65,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("text", nargs="+")
     p.add_argument("--speak", action="store_true")
     p.add_argument("--quiet-tools", action="store_true")
-    for name in ("listen", "stop", "status", "doctor", "new", "app", "popover", "daemon"):
+    for name in ("listen", "stop", "status", "doctor", "new", "app", "app-background", "popover", "daemon"):
         sub.add_parser(name)
     p = sub.add_parser("voice")
     p.add_argument("setting", choices=["continuous", "wake"])
@@ -81,9 +81,9 @@ def main(argv: list[str] | None = None) -> int:
         from .daemon import main as daemon_main
         daemon_main()
         return 0
-    if args.command in ("app", "popover"):
+    if args.command in ("app", "app-background", "popover"):
         from .app import main as app_main
-        return app_main(["--popover"] if args.command == "popover" else [])
+        return app_main({"app": [], "app-background": ["--background"], "popover": ["--popover"]}[args.command])
     if args.command == "key":
         from .voice.speak import store_elevenlabs_key
         store_elevenlabs_key(getpass.getpass("ElevenLabs API key: "))

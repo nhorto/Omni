@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""Preview or install Omni for this user. Never uses sudo; prints the pacman line for anything missing.
+
+  python3 install.py            show what would change
+  python3 install.py --apply    create the venv, launchers, services, plugin, and Hyprland file
+"""
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import shutil
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+HOME = Path.home()
+DATA = HOME / ".local/share/omni"
+VENV = DATA / "venv"
+SYSTEM_PACKAGES = {"python-gobject": "gi", "gtk4": None, "libadwaita": None, "mpv": "mpv", "wtype": "wtype",
+                   "grim": "grim", "tesseract": "tesseract", "tesseract-data-eng": None, "foot": "foot",
+                   "libnotify": "notify-send", "libsecret": "secret-tool", "pipewire": "pw-record"}
+
+
+def launcher(module: str) -> str:
+    return (f"#!/bin/sh\nexport PYTHONPATH={ROOT}${{PYTHONPATH:+:$PYTHONPATH}}\n"
+            f"exec {VENV / 'bin/python'} -m {module} \"$@\"\n")
+
+
+def files() -> dict[Path, tuple[str, int]]:
+    result = {
+        HOME / ".local/bin/omni": (launcher("omni.cli"), 0o755),
+        HOME / ".local/bin/omnid": (launcher("omni.daemon"), 0o755),
+        HOME / ".config/hypr/omni.lua": ((ROOT / "integration/hypr/omni.lua").read_text(), 0o644),
+    }
+    entry = ((ROOT / "integration/omni.desktop").read_text()
+             .replace("@OMNI_LAUNCHER@", str(HOME / ".local/bin/omni"))
+             .replace("@OMNI_ICON@", str(ROOT / "assets/omni-icon.png")))
+    result[HOME / ".local/share/applications/dev.omni.Omni.desktop"] = (entry, 0o644)
+    for unit in (ROOT / "integration/systemd-user").iterdir():
+        result[HOME / ".config/systemd/user" / unit.name] = (unit.read_text(), 0o644)
+    for source in (ROOT / "integration/omarchy-plugin").iterdir():
+        result[HOME / ".config/omarchy/plugins/local.omni" / source.name] = (source.read_text(), 0o644)
+    return result
+
+
+def missing_packages() -> list[str]:
+    missing = []
+    for package, probe in SYSTEM_PACKAGES.items():
+        if probe == "gi":
+            ok = subprocess.run(["/usr/bin/python3", "-c", "import gi; gi.require_version('Adw', '1')"],
+                                capture_output=True).returncode == 0
+        elif probe:
+            ok = shutil.which(probe) is not None
+        else:
+            ok = subprocess.run(["pacman", "-Q", package], capture_output=True).returncode == 0 if shutil.which("pacman") else True
+        if not ok:
+            missing.append(package)
+    return missing
+
+
+def write(path: Path, content: str, mode: int, stamp: str) -> bool:
+    if path.exists() and path.read_text() == content:
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        backup = DATA / "install-backups" / stamp / path.relative_to(HOME)
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, backup)
+    path.write_text(content)
+    path.chmod(mode)
+    return True
+
+
+def make_venv() -> None:
+    if not (VENV / "bin/python").exists():
+        subprocess.run(["/usr/bin/python3", "-m", "venv", "--system-site-packages", str(VENV)], check=True)
+    subprocess.run([str(VENV / "bin/pip"), "install", "--quiet", "--upgrade", "-r", str(ROOT / "requirements.txt")], check=True)
+    # Fetch openWakeWord's feature models and the default wake word once, so the daemon starts offline.
+    subprocess.run([str(VENV / "bin/python"), "-c",
+                    "import openwakeword.utils as u; u.download_models(['hey_jarvis'])"], check=False)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--skip-venv", action="store_true", help="Do not create or update the Python venv")
+    args = parser.parse_args()
+    missing = missing_packages() if sys.platform.startswith("linux") else []
+    if missing:
+        print("Missing system packages (install them yourself):\n  sudo pacman -S --needed " + " ".join(missing))
+    if not args.apply:
+        print(f"Would create {VENV} and install requirements.txt into it")
+        for path in files():
+            print("Would install:", path)
+        print("Preview only. Run with --apply.")
+        return
+    if not args.skip_venv:
+        make_venv()
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    for path, (content, mode) in files().items():
+        if write(path, content, mode, stamp):
+            print("Installed:", path)
+    print("""
+Next:
+  1. Add  require("hypr.omni")  to ~/.config/hypr/hyprland.lua (after the other requires), then remove old Omi bindings.
+  2. systemctl --user disable --now omi-voice.service   # the old bridge, if installed
+  3. systemctl --user daemon-reload && systemctl --user enable --now omnid.service omni-app.service
+  4. omni key elevenlabs      # once, if the key is not already in the keyring from Omi
+  5. omni doctor              # everything should be ✓ or an optional !
+  6. omni ask "what time is it"
+""")
+
+
+if __name__ == "__main__":
+    main()

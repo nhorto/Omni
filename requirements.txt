@@ -1,0 +1,6 @@
+# Voice input (optional: text, hotkeys, and speech output work without these).
+numpy>=1.26
+openwakeword>=0.6
+pysilero-vad>=2.0
+faster-whisper>=1.1
+# The app uses the system PyGObject/GTK 4/libadwaita (pacman: python-gobject gtk4 libadwaita).

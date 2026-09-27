@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "local.omni",
+  "name": "Omni",
+  "version": "0.2.0",
+  "author": "Omni contributors",
+  "description": "Status, talk button, and live card for Omni, the desktop assistant.",
+  "kinds": ["bar-widget", "panel"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "barWidget": "BarWidget.qml",
+    "panel": "OmniIndicator.qml"
+  },
+  "barWidget": {
+    "displayName": "Omni",
+    "description": "Shows what Omni is doing; click to talk or open it.",
+    "category": "AI",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
