@@ -130,7 +130,8 @@ class Daemon:
         event.setdefault("at", time.time())
         for queue in list(self.subscribers):
             queue.put_nowait(event)
-        self._set_state()
+        if not str(kind).startswith("voice."):  # live mic feedback (~15 a second) never changes the state
+            self._set_state()
 
     def _speaking(self, speaking: bool) -> None:
         self.flags["speaking"] = speaking

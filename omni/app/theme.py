@@ -1,7 +1,8 @@
 """Map the current Omarchy theme (colors.toml + font) onto libadwaita's named colors, live.
 
-Omarchy writes the active theme to ~/.config/omarchy/current/theme/colors.toml
-with tokens like accent, background, foreground, and mode = "dark" | "light".
+Omarchy writes the active theme to ~/.local/state/omarchy/current/theme/colors.toml
+(~/.config/omarchy/current/theme on older installs) with tokens like accent,
+background, foreground, and mode = "dark" | "light".
 We translate them into @define-color overrides so every stock libadwaita widget
 picks them up, and re-apply when the theme changes.
 """
@@ -16,7 +17,15 @@ from pathlib import Path
 
 from gi.repository import Adw, Gdk, Gio, Gtk
 
-THEME_DIR = Path(os.environ.get("OMNI_THEME_DIR") or Path.home() / ".config/omarchy/current/theme")
+
+def _theme_dir() -> Path:
+    if override := os.environ.get("OMNI_THEME_DIR"):
+        return Path(override)
+    state, legacy = Path.home() / ".local/state/omarchy/current/theme", Path.home() / ".config/omarchy/current/theme"
+    return legacy if legacy.is_dir() and not state.is_dir() else state
+
+
+THEME_DIR = _theme_dir()
 
 APP_CSS = """
 .omni-bubble { padding: 10px 14px; border-radius: 14px; }

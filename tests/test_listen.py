@@ -125,6 +125,17 @@ class FollowUpTest(unittest.TestCase):
         self.voice._finish(FakeStream("so what else can you do for me today"), now, now, "request", "name", True)
         self.assertEqual(self.voice.asked, [("ask", "so what else can you do for me today")])
 
+    def test_a_turn_that_never_finishes_cannot_hold_the_conversation_open(self):
+        loop = mock.Mock()
+        loop.call_soon_threadsafe = lambda callback, *args: callback(*args)
+        self.voice.loop = loop
+        self.voice._close_follow_up(conversing=True)  # request sent; no answer ever arrives
+        delay, close = loop.call_later.call_args.args
+        self.assertEqual(delay, 120.0)
+        close()
+        self.hear("an unrelated sentence much later")
+        self.assertEqual(self.voice.asked, [])
+
     def test_follow_up_zero_turns_it_off(self):
         self.voice.settings.follow_up = 0
         self.answered()

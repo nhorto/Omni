@@ -54,7 +54,84 @@ START_CHUNKS = 6       # ~190 ms to start a continuous-mode utterance
 MAX_SECONDS = 30
 NO_SPEECH_SECONDS = 5
 VOXTYPE_STATE = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "voxtype/state"
+BUSY_LIMIT = 120.0     # longest a conversation stays open while Omni is still busy with a turn
 SEND_GRACE = 2.0       # a hotkey press this soon after capture ended was meant as "send", not "listen again"
+LEVEL_EVERY = 2        # one voice.level event per 2 chunks: ~15 a second
+LEVEL_FLOOR, LEVEL_CEILING = -60.0, -10.0  # dBFS mapped onto 0..1
+
+
+class Feedback:
+    """Live events for the on-screen indicator while a capture runs.
+
+    Only speech addressed to Omni is ever emitted: a capture started by the hotkey, an
+    approval answer, or inside a conversation shows from the start; one started by
+    room speech shows only once its streaming transcript calls Omni by name.
+    Until then nothing about it (not even its loudness) leaves this object.
+    """
+
+    def __init__(self, voice: VoiceLoop, trigger: str, open_mic: bool, spoken: str = ""):
+        self.voice, self.trigger, self.spoken = voice, trigger, spoken
+        self.open_mic = open_mic
+        self.visible = False
+        self.chunks, self.peak, self.text = 0, 0.0, ""
+        if open_mic and trigger != "barge-in":  # talking over Omni shows once it is more than Omni's own echo
+            self._show()
+
+    def _emit(self, event: dict) -> None:
+        self.voice.loop.call_soon_threadsafe(self.voice.daemon.emit, event)
+
+    def _show(self) -> None:
+        self.visible = True
+        self._emit({"event": "voice.capture", "state": "start", "trigger": self.trigger})
+
+    def _shown_text(self, partial: str) -> str | None:
+        """What the indicator may show of a partial transcript, or None for nothing."""
+        if self.trigger == "barge-in" and is_echo(partial, self.spoken):
+            return None  # Omni's own voice in the mic
+        if self.open_mic and self.trigger not in ("name", "barge-in"):
+            return WAKE_PHRASES.sub("", partial)  # hotkey, answer: all of it goes to Omni
+        if (request := addressed(partial)) is not None:
+            return request  # from the name on; words before it were not for Omni
+        return partial if self.open_mic else None
+
+    def chunk(self, chunk: bytes, partial: str) -> None:
+        """Called from the mic thread for every chunk of the capture."""
+        if not self.visible:
+            now = time.monotonic()
+            voice = self.voice
+            if voice._conversing and now < voice._follow_up_until or now < voice._named_until:
+                self.open_mic = True  # the conversation opened (or "Omni" was said) during this capture
+            if (self.trigger == "barge-in" or not self.open_mic) and (not partial or self._shown_text(partial) is None):
+                return
+            self._show()
+        samples = np.frombuffer(chunk, dtype=np.int16).astype(np.float32)
+        self.peak = max(self.peak, float(np.mean(samples * samples)))
+        self.chunks += 1
+        if self.chunks % LEVEL_EVERY == 0:
+            self._emit({"event": "voice.level", "level": level(self.peak)})
+            self.peak = 0.0
+        if partial:
+            text = self._shown_text(partial)
+            if text is not None and text != self.text:
+                self.text = text
+                self._emit({"event": "voice.partial", "text": text})
+
+    def ended(self) -> None:
+        if self.visible:
+            self._emit({"event": "voice.capture", "state": "end", "trigger": self.trigger})
+
+    def finished(self, sent: bool, text: str = "") -> None:
+        """The transcript went to the agent or an approval (sent), or nothing came of it."""
+        if sent:
+            self._emit({"event": "voice.capture", "state": "sent", "trigger": self.trigger, "text": text})
+        elif self.visible:
+            self._emit({"event": "voice.capture", "state": "dropped", "trigger": self.trigger})
+
+
+def level(power: float) -> float:
+    """Mean square of s16 samples as 0..1 loudness for the indicator."""
+    db = 10 * np.log10(power / 32768 ** 2 + 1e-12)
+    return round(min(1.0, max(0.0, (db - LEVEL_FLOOR) / (LEVEL_CEILING - LEVEL_FLOOR))), 2)
 
 
 class VoiceLoop:
@@ -124,6 +201,7 @@ class VoiceLoop:
         if self._follow_up_timer:
             self._follow_up_timer.cancel()
         self._follow_up_timer = self.loop.call_later(seconds, self._close_follow_up)
+        self._window_shown = True
         self.daemon.set_listening(True)
 
     def end_conversation(self) -> None:
@@ -131,14 +209,15 @@ class VoiceLoop:
         self._close_follow_up()
 
     def _close_follow_up(self, conversing: bool = False) -> None:
-        was_open = self._follow_up_timer is not None
         self._conversing = conversing and float(self.settings.follow_up) > 0
         # In a conversation the window stays open while Omni thinks and speaks; it closes `follow_up` s after.
         self._follow_up_until = float("inf") if self._conversing else 0.0
         if self._follow_up_timer:
             self._follow_up_timer.cancel()
-            self._follow_up_timer = None
-        if was_open:
+        # A turn that fails or never speaks must not leave the conversation open for good.
+        self._follow_up_timer = self.loop.call_later(BUSY_LIMIT, self._close_follow_up) if self._conversing else None
+        if getattr(self, "_window_shown", False):
+            self._window_shown = False
             self.daemon.set_listening(False)
 
     async def listen_once(self, timeout: float) -> str:
@@ -265,6 +344,7 @@ class VoiceLoop:
         spoken = self.daemon.speaker.recent_text() if trigger == "barge-in" else ""
         cut = trigger != "barge-in"
         conversation = self._conversing and time.monotonic() < self._follow_up_until
+        feedback = Feedback(self, trigger, shown or conversation or time.monotonic() < self._named_until, spoken)
         started = time.monotonic()
         speech_end = started if heard_speech else 0.0  # when the last voiced chunk arrived
         silence = 0.0
@@ -279,11 +359,13 @@ class VoiceLoop:
             else:
                 silence += chunk_seconds
             elapsed = now - started
+            partial = stream.partial()
+            feedback.chunk(chunk, partial)
             if self._stop_capture.is_set() or elapsed > MAX_SECONDS:
                 break
             if heard_speech and self.turn.update(audio, probability, silence):
                 break
-            if not cut and (partial := stream.partial()) and addressed(partial) is not None and not is_echo(partial, spoken):
+            if not cut and partial and addressed(partial) is not None and not is_echo(partial, spoken):
                 cut = True
                 log.info("talk-over: %r stops speech", partial)
                 self._call(self.daemon.session.interrupt())
@@ -293,14 +375,18 @@ class VoiceLoop:
         ended = time.monotonic()
         self._capturing = False
         self._capture_ended = ended
+        feedback.ended()
         if shown:
             self.loop.call_soon_threadsafe(self.daemon.set_listening, False)
         if audio:
             # Decided now, not when the transcript is ready: a long utterance may finish after the window closes.
             conversation = conversation or self._conversing and ended < self._follow_up_until
-            self._transcriber.submit(self._finish, stream, speech_end or ended, ended, self._purpose, trigger, conversation)
-        elif self._once and not self._once.done():
-            self.loop.call_soon_threadsafe(self._resolve_once, "")
+            self._transcriber.submit(self._finish, stream, speech_end or ended, ended, self._purpose, trigger, conversation,
+                                     feedback)
+        else:
+            feedback.finished(False)
+            if self._once and not self._once.done():
+                self.loop.call_soon_threadsafe(self._resolve_once, "")
 
     def _loud(self, power) -> bool:
         """Room speech, not the faint leak of Omni's own voice that Silero still calls speech."""
@@ -311,7 +397,8 @@ class VoiceLoop:
             yield data
 
     def _finish(self, stream, speech_end: float, ended: float, purpose: str, trigger: str = "",
-                conversation: bool = False) -> None:
+                conversation: bool = False, feedback: Feedback | None = None) -> None:
+        done = feedback.finished if feedback else lambda sent, text="": None
         text = stream.finish()
         heard = time.monotonic()
         # Measured from when the speaker stopped, so the end-of-turn wait counts against latency.
@@ -324,12 +411,14 @@ class VoiceLoop:
             elif request is None and conversation and not is_echo(text, self.daemon.speaker.recent_text()):
                 if STOP_PHRASES.match(text.strip()) and len(text.split()) <= 4:
                     self.loop.call_soon_threadsafe(self.end_conversation)  # "thanks", "never mind"
+                    done(False)
                     return
                 request = text  # a reply in the conversation: no name needed
             if request is None:
                 # Not for Omni. Room speech is neither logged nor kept; the count shows a request was missed.
                 log.info("ignored %d words not addressed to Omni %s (conversation %s)", len(text.split()), timings,
                          "on" if self._conversing else "off")
+                done(False)
                 return
             log.info("heard %r %s (addressed by name)", text, timings)
             if not request.strip(" .,!?"):
@@ -347,17 +436,22 @@ class VoiceLoop:
                 action, request = "ask", text  # talking over Omni mid-conversation: a reply, no name needed
             log.info("talk-over: %s", action)
             if action == "ignore":
+                done(False)
                 return
             if action == "stop":
                 self._call(self.daemon.session.interrupt())
+                done(False)
                 return
             text = request  # ask() below stops speech and interrupts the turn
         if purpose == "answer":
+            done(bool(self._once and not self._once.done()), text)
             self.loop.call_soon_threadsafe(self._resolve_once, text)  # dropped if already answered
             return
         text = WAKE_PHRASES.sub("", text).strip()
         if len(text) < 2:
+            done(False)
             return
+        done(True, text)
         self.loop.call_soon_threadsafe(self._close_follow_up, True)  # reopens once this answer ends
         self.loop.call_soon_threadsafe(self.daemon.set_listening, False, text)
         self._call(self.daemon.session.ask(text, source="voice", speak=True, t0=speech_end, timings=timings))
