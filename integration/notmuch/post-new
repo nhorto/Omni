@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+"""notmuch post-new hook, installed by Omni's install.py.
+
+Tags spam, trash, and sent mail by folder, then hands new inbox mail to Omni's triage
+(`omni mail intake`: omnid when it runs, else the same rules in this process). If Omni
+cannot run at all, it falls back to one plain notification per account.
+MAIL_QUIET=1 still sorts and tags, but sends no notifications (first syncs, bulk imports).
+"""
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+OMNI = "@OMNI_LAUNCHER@"
+ROOT = "@OMNI_ROOT@"
+TIMEOUT = 60
+
+
+def notmuch(*args, input=None):
+    return subprocess.run(["notmuch", *args], input=input, capture_output=True, text=True).stdout
+
+
+def folders(accounts, name):
+    return "(" + " or ".join(f"folder:{a}/{name}" for a in accounts) + ")"
+
+
+def triage(ids):
+    """True once Omni has sorted the ids (or is still busy with them)."""
+    attempts = [([OMNI, "mail", "intake"], None),
+                ([sys.executable, "-m", "omni.triage", "intake"], {**os.environ, "PYTHONPATH": ROOT})]
+    for argv, env in attempts:
+        try:
+            done = subprocess.run(argv, input="\n".join(ids), text=True, capture_output=True, timeout=TIMEOUT, env=env)
+        except subprocess.TimeoutExpired:
+            return True  # still running; trying again could notify twice
+        except OSError:
+            continue
+        if done.returncode in (0, 3):  # 3: omnid is still working on it
+            return True
+    return False
+
+
+def plain(accounts):
+    """The old behaviour: new unread inbox mail per account, not from Nick."""
+    mine = " ".join(notmuch("config", "get", key) for key in ("user.primary_email", "user.other_email"))
+    mine = " or ".join(f"from:{a}" for a in mine.replace(";", " ").split()) or "not *"
+    for account in accounts:
+        query = f"tag:new and tag:unread and folder:{account}/Inbox and not ({mine})"
+        found = json.loads(notmuch("search", "--format=json", "--output=summary", "--limit=4", query) or "[]")
+        if not found:
+            continue
+        total = int(notmuch("count", query).strip() or 0)
+        if total > 25:
+            subprocess.run(["notify-send", "--app-name=Mail", f"{account}: {total} new messages"])
+            continue
+        lines = [f"{m['authors'].split('|')[0].strip()} — {m['subject']}" for m in found[:3]]
+        if total > 3:
+            lines.append(f"and {total - 3} more")
+        title = f"New mail ({account})" if total == 1 else f"{total} new messages ({account})"
+        subprocess.run(["notify-send", "--app-name=Mail", "--icon=mail-unread", title, "\n".join(lines)])
+
+
+root = Path(notmuch("config", "get", "database.path").strip())
+accounts = sorted(p.name for p in root.iterdir() if p.is_dir() and not p.name.startswith(".")) if root.is_dir() else []
+if accounts:
+    batch = "".join(f"+{tag} -- tag:new and {folders(accounts, folder)}\n"
+                    for tag, folder in (("spam", "Spam"), ("trash", "Trash"), ("sent", "Sent")))
+    subprocess.run(["notmuch", "tag", "--batch"], input=batch, text=True)
+    ids = notmuch("search", "--output=messages", f"tag:new and {folders(accounts, 'Inbox')}").split()
+    if ids and not triage(ids) and not os.environ.get("MAIL_QUIET"):
+        plain(accounts)
+subprocess.run(["notmuch", "tag", "-new", "--", "tag:new"])

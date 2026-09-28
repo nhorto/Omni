@@ -116,6 +116,8 @@ class Daemon:
         if kind == "turn.started":
             self.flags["thinking"], self.flags["working"] = True, 0
             self.detail = event.get("request", "")[:120]
+            if self.voice and event.get("source") != "voice":
+                self.voice.end_conversation()
         elif kind == "tool" and event.get("kind") == "foreground":
             self.flags["working"] += 1 if event.get("status") == "running" else -1
             self.flags["working"] = max(0, self.flags["working"])
@@ -123,6 +125,8 @@ class Daemon:
         elif kind == "turn.completed":
             self.flags["thinking"], self.flags["working"] = False, 0
             self.detail = ""
+            if self.voice and not event.get("spoken"):
+                self.voice.follow_up()  # a silent answer (an action) also leaves room for a reply
         event.setdefault("at", time.time())
         for queue in list(self.subscribers):
             queue.put_nowait(event)
@@ -508,6 +512,18 @@ async def op_doctor(daemon, request, send):
     return await asyncio.to_thread(checks)
 
 
+async def op_mail_intake(daemon, request, send):
+    from . import triage
+    result = await asyncio.to_thread(triage.intake, request.get("ids", []), bool(request.get("quiet")))
+    daemon.emit({"event": "mail.triaged", **result})
+    return result
+
+
+async def op_mail_digest(daemon, request, send):
+    from . import triage
+    return await asyncio.to_thread(triage.digest, request.get("since", ""), request.get("notify", True))
+
+
 OPS = {
     "ask": op_ask, "subscribe": op_subscribe, "status": op_status, "interrupt": op_interrupt, "answer": op_answer,
     "new_thread": op_new_thread, "listen": op_listen, "voice": op_voice, "stop_speaking": op_stop_speaking, "say": op_say,
@@ -517,7 +533,7 @@ OPS = {
     "skills.delete": op_skills_delete, "skills.restore": op_skills_restore,
     "episodes": op_episodes, "episode.delete": op_episode_delete, "delegation.stop": op_delegation_stop,
     "settings.get": op_settings_get, "settings.set": op_settings_set, "policy.get": op_policy_get,
-    "policy.set": op_policy_set, "doctor": op_doctor,
+    "policy.set": op_policy_set, "doctor": op_doctor, "mail.intake": op_mail_intake, "mail.digest": op_mail_digest,
 }
 
 

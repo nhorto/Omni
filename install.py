@@ -58,6 +58,11 @@ def files() -> dict[Path, tuple[str, int]]:
         result[HOME / ".config/systemd/user" / unit.name] = (unit.read_text(), 0o644)
     for source in (ROOT / "integration/omarchy-plugin").iterdir():
         result[HOME / ".config/omarchy/plugins/local.omni" / source.name] = (source.read_text(), 0o644)
+    notmuch_dir = HOME / ".config/notmuch/default"
+    if notmuch_dir.is_dir():  # mail is set up (docs/email.md)
+        hook = ((ROOT / "integration/notmuch/post-new").read_text()
+                .replace("@OMNI_LAUNCHER@", str(HOME / ".local/bin/omni")).replace("@OMNI_ROOT@", str(ROOT)))
+        result[notmuch_dir / "hooks/post-new"] = (hook, 0o755)
     if conf := echo_cancel():
         result[ECHO_CANCEL] = (conf, 0o644)
     return result

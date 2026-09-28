@@ -38,7 +38,7 @@ import numpy as np
 from openwakeword.model import Model as WakeModel
 from pysilero_vad import SileroVoiceActivityDetector
 
-from .speak import WAKE_PHRASES, addressed, is_echo, talk_over
+from .speak import STOP_PHRASES, WAKE_PHRASES, addressed, is_echo, talk_over
 from .stt import make_transcriber
 from .turn import make_turn_detector
 
@@ -75,6 +75,10 @@ class VoiceLoop:
         self._capturing = False
         self._capture_ended = 0.0
         self._named_until = 0.0  # after a bare "Omni", the next utterance is for Omni without the name
+        # A conversation: after Omni answers a spoken request, a reply within `follow_up` seconds needs no name.
+        self._conversing = False
+        self._follow_up_until = 0.0
+        self._follow_up_timer: asyncio.TimerHandle | None = None
         self._purpose = "request"
         self._transcriber = ThreadPoolExecutor(1, thread_name_prefix="whisper")
         self.vad = SileroVoiceActivityDetector()
@@ -104,6 +108,37 @@ class VoiceLoop:
 
     def set_speaking(self, speaking: bool) -> None:
         self.speaking = speaking
+        if speaking:
+            self._close_follow_up(conversing=self._conversing)
+        else:
+            self.follow_up()
+
+    def follow_up(self) -> None:
+        """Omni has answered a spoken request: listen a few seconds for a reply that does not use the name."""
+        seconds = float(self.settings.follow_up)
+        if not self._conversing or seconds <= 0 or self._once is not None:
+            return
+        if self.daemon.speaker.recent_text(10).rstrip().endswith("?"):
+            seconds *= 2  # Omni asked something: give time to think
+        self._follow_up_until = time.monotonic() + seconds
+        if self._follow_up_timer:
+            self._follow_up_timer.cancel()
+        self._follow_up_timer = self.loop.call_later(seconds, self._close_follow_up)
+        self.daemon.set_listening(True)
+
+    def end_conversation(self) -> None:
+        """A typed request, "thanks", or silence: the next spoken request needs the name again."""
+        self._close_follow_up()
+
+    def _close_follow_up(self, conversing: bool = False) -> None:
+        was_open = self._follow_up_timer is not None
+        self._conversing = conversing
+        self._follow_up_until = 0.0
+        if self._follow_up_timer:
+            self._follow_up_timer.cancel()
+            self._follow_up_timer = None
+        if was_open:
+            self.daemon.set_listening(False)
 
     async def listen_once(self, timeout: float) -> str:
         """Capture one short reply (approvals, clarifying questions) without sending it to the agent."""
@@ -190,7 +225,7 @@ class VoiceLoop:
                 if self.barge_in and voiced_run >= BARGE_CHUNKS and self._loud(power):
                     # Keep talking while this is transcribed; only speech addressed to Omni interrupts.
                     trigger = "barge-in"
-            elif self.continuous and voiced_run >= START_CHUNKS:
+            elif (self.continuous or not self.wake_by_name and now < self._follow_up_until) and voiced_run >= START_CHUNKS:
                 trigger = "continuous"
             elif self.wake_by_name and self.wake_enabled and voiced_run >= START_CHUNKS:
                 trigger = "name"
@@ -259,7 +294,7 @@ class VoiceLoop:
         if shown:
             self.loop.call_soon_threadsafe(self.daemon.set_listening, False)
         if audio:
-            self._transcriber.submit(self._finish, stream, speech_end or ended, ended, self._purpose, trigger)
+            self._transcriber.submit(self._finish, stream, speech_end or ended, ended, self._purpose, trigger, started)
         elif self._once and not self._once.done():
             self.loop.call_soon_threadsafe(self._resolve_once, "")
 
@@ -271,7 +306,7 @@ class VoiceLoop:
         while data := self._read_chunk():
             yield data
 
-    def _finish(self, stream, speech_end: float, ended: float, purpose: str, trigger: str = "") -> None:
+    def _finish(self, stream, speech_end: float, ended: float, purpose: str, trigger: str = "", began: float = 0.0) -> None:
         text = stream.finish()
         heard = time.monotonic()
         # Measured from when the speaker stopped, so the end-of-turn wait counts against latency.
@@ -281,8 +316,15 @@ class VoiceLoop:
             request = addressed(text)
             if request is None and time.monotonic() < self._named_until:
                 request = text  # "Omni, … <pause> … open Files": the name ended the last capture
+            elif request is None and began < self._follow_up_until and not is_echo(text, self.daemon.speaker.recent_text()):
+                if STOP_PHRASES.match(text.strip()) and len(text.split()) <= 4:
+                    self.loop.call_soon_threadsafe(self.end_conversation)  # "thanks", "never mind"
+                    return
+                request = text  # a reply in the conversation: no name needed
             if request is None:
-                return  # not for Omni; room speech is neither logged nor kept
+                # Not for Omni. Room speech is neither logged nor kept; the count shows a request was missed.
+                log.info("ignored %d words not addressed to Omni", len(text.split()))
+                return
             log.info("heard %r %s (addressed by name)", text, timings)
             if not request.strip(" .,!?"):
                 self._named_until = time.monotonic() + 4.0
@@ -308,6 +350,7 @@ class VoiceLoop:
         text = WAKE_PHRASES.sub("", text).strip()
         if len(text) < 2:
             return
+        self.loop.call_soon_threadsafe(self._close_follow_up, True)  # reopens once this answer ends
         self.loop.call_soon_threadsafe(self.daemon.set_listening, False, text)
         self._call(self.daemon.session.ask(text, source="voice", speak=True, t0=speech_end, timings=timings))
 

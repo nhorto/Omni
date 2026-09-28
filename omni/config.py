@@ -56,6 +56,7 @@ class Settings:
     turn_detector: str = "smart"  # "smart" (Smart Turn model; end_silence if it cannot load) or "silence"
     turn_threshold: float = 0.5  # Smart Turn: end the turn when p(finished) reaches this
     turn_max_silence: float = 1.5  # Smart Turn: end the turn after this much silence regardless
+    follow_up: float = 15.0  # seconds after Omni answers a spoken request when a reply needs no name (double after a question); 0 turns it off
     # Nested agents.
     delegate_default: str = "background"
     terminal: str = "foot"

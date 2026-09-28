@@ -6,6 +6,8 @@
   omni status | doctor | new             state, setup checks, fresh conversation
   omni voice continuous|wake [on|off]    toggle hands-free listening or the wake word
   omni memory [search QUERY]             show notes or search memory and past turns
+  omni mail intake [IDS]                 sort new mail (the notmuch post-new hook runs this; ids on stdin)
+  omni mail digest [--since 12h]         summary of urgent, to-look-at, and digest mail
   omni key elevenlabs                    store the ElevenLabs API key in the keyring
   omni app | popover                     open the full window or the quick-ask popover
 """
@@ -15,6 +17,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import os
 import sys
 import time
 
@@ -58,6 +61,28 @@ def answer_prompt(client: Client, prompt: dict) -> None:
         client.send("answer", prompt=prompt["id"], value=input(f"\n{prompt['text']} "))
 
 
+def mail(args) -> int:
+    """Through omnid when it runs, else the same rules in this process, so mail is never left unsorted."""
+    if args.action == "intake":
+        ids = args.ids or ([] if sys.stdin.isatty() else sys.stdin.read().split())
+        request = {"ids": ids, "quiet": args.quiet or bool(os.environ.get("MAIL_QUIET"))}
+    else:
+        request = {"since": args.since, "notify": not args.no_notify}
+    try:
+        with Client(timeout=45) as client:
+            result = client.call(f"mail.{args.action}", **request)
+    except TimeoutError:
+        print("omni: omnid is still working on it; it will finish on its own", file=sys.stderr)
+        return 3
+    except (DaemonUnavailable, RuntimeError) as exc:
+        if isinstance(exc, RuntimeError) and "unknown op" not in str(exc):
+            raise
+        from . import triage
+        result = triage.intake(**request) if args.action == "intake" else triage.digest(**request)
+    print(json.dumps(result) if args.action == "intake" else f"{result['title']}\n\n{result['text']}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="omni", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -73,6 +98,14 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("memory")
     p.add_argument("action", nargs="?", choices=["search"])
     p.add_argument("query", nargs="*")
+    p = sub.add_parser("mail")
+    msub = p.add_subparsers(dest="action", required=True)
+    m = msub.add_parser("intake")
+    m.add_argument("ids", nargs="*")
+    m.add_argument("--quiet", action="store_true", help="tag only, no notifications (also MAIL_QUIET=1)")
+    m = msub.add_parser("digest")
+    m.add_argument("--since", default="", help="e.g. 12h or 2d; default is since the last digest")
+    m.add_argument("--no-notify", action="store_true")
     p = sub.add_parser("key")
     p.add_argument("service", choices=["elevenlabs"])
     args = parser.parse_args(argv)
@@ -92,6 +125,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "ask":
             return ask(" ".join(args.text), args.speak, not args.quiet_tools)
+        if args.command == "mail":
+            return mail(args)
         if args.command == "listen":
             call("listen")
         elif args.command == "stop":

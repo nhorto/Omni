@@ -1,0 +1,7 @@
+[Unit]
+Description=Omni mail digest (urgent, to look at, and bulk mail since the last one)
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/omni mail digest
+Environment=XDG_RUNTIME_DIR=%t
