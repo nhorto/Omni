@@ -31,6 +31,10 @@ os.environ.setdefault("MOONSHINE_ORT_SINGLE_THREAD", "1")  # read when the model
 log = logging.getLogger("omni.stt")
 RATE = 16000
 STEP = int(0.25 * RATE)  # new samples between streaming passes, at least
+# Each pass re-decodes the whole utterance, so on one core a long monologue falls behind at STEP. Fast passes
+# only matter early (the name, "Omni, stop"); after EARLY samples, pass every LONG_STEP (the last pass still has to decode it all, ~0.3 s for 25 s).
+EARLY = 3 * RATE
+LONG_STEP = int(0.75 * RATE)
 MODEL_DIR = Path.home() / ".local/share/omni/models/moonshine"
 ARCHS = {"tiny": "TINY_STREAMING", "small": "SMALL_STREAMING", "medium": "MEDIUM_STREAMING"}
 NEVER = 1e9  # the package's own update cadence; we decide when passes run
@@ -116,8 +120,9 @@ class Moonshine:
         transcript = state.native.stop() if final else state.native.update_transcription()
         if transcript is not None:
             state.text = clean(" ".join(line.text for line in transcript.lines))
+        state.heard += sum(len(chunk) for chunk in chunks) // 2
         # A pass must cover at least as much audio as it took, or a slow machine falls further behind each time.
-        state.step = max(STEP, int((time.monotonic() - started) * RATE))
+        state.step = max(STEP if state.heard < EARLY else LONG_STEP, int((time.monotonic() - started) * RATE))
         if final:
             self._close(state)
 
@@ -136,6 +141,7 @@ class _State:
         self.lock = threading.Lock()
         self.pending: list[bytes] = []
         self.samples = 0
+        self.heard = 0  # samples given to the model so far
         self.step = STEP
         self.queued = False
         self.native = None
