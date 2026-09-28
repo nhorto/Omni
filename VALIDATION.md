@@ -2,6 +2,18 @@
 
 Live checks for the rebuild, newest first. Record the machine, CLI versions, and timings. Timings come from `omni ask` output or the Activity page and are measured from when omnid receives the request (for voice, from the end of speech).
 
+## 2026-09-27 · Approvals and desktop tools on the Omarchy desktop (tools called directly, workspace 9)
+
+| Check | Result |
+| --- | --- |
+| "Delete everything in the folder ~/omni-approval-test" (a scratch folder, not Downloads) | Asked 4.1 s after the request (notification, app, one spoken line); declined; all three files intact; Omni replied that nothing was removed. The prompt headline was the raw `find … -exec rm` command, so approvals now show the policy reason as the headline (spoken) and the command on the next line |
+| `app_launch` foot on workspace 9, left | 195 ms, detected and placed |
+| `window_focus`, `window_place` right, `window_close`, `workspace_switch` | all work (10–30 ms) |
+| `type_text` with submit | typed and ran the command |
+| `keys_send` CTRL+L | failed after `type_text`: wtype's temporary keymap makes Hyprland's `send_shortcut` fail with "key not found". Now falls back to focusing the window and pressing the chord with wtype; verified the terminal cleared |
+| `screen_read` | 1.7 s; OCR read the typed commands and output |
+| Follow-up conversation (Nick, live) | 3 turns without the name worked; a request made more than 8 s after "what would you like me to do?" was dropped. Window is now 15 s, 30 s after a question |
+
 ## 2026-09-27 · Voice upgrade after phases 1–2 (Omarchy desktop, `scripts/voice_bench.py`, quiet machine)
 
 Same bench, 19 cases, times from when speech ended. Mid-thought pauses are now spliced into one synthesized sentence (the old per-fragment synthesis ended each fragment with falling intonation, which no end-of-turn model should accept). "Before" = `silence` + `whisper`; "after" = the new defaults (`smart` + `moonshine`).

@@ -152,8 +152,28 @@ def keys_send(ctx, chord: str, address: str = "") -> str:
     mods, key = " ".join(parts[:-1]), parts[-1]
     target = address or hypr.query("activewindow").get("address", "")
     hypr.window(target)
-    hypr.dispatch(f'hl.dsp.send_shortcut({{ mods = "{mods}", key = "{key}", window = "address:{target}" }})')
+    try:
+        hypr.dispatch(f'hl.dsp.send_shortcut({{ mods = "{mods}", key = "{key}", window = "address:{target}" }})')
+    except subprocess.CalledProcessError as exc:
+        # After type_text, wtype's temporary keymap leaves Hyprland unable to resolve key names
+        # ("send_shortcut: key not found"); press the chord through wtype in the focused target instead.
+        if "key not found" not in (exc.stdout or "") or not shutil.which("wtype"):
+            raise
+        hypr.dispatch(f'hl.dsp.focus({{ window = "address:{target}" }})')
+        subprocess.run(["wtype", *_wtype_chord(parts)], check=True, timeout=5)
     return f"Sent {chord}"
+
+
+WTYPE_MODS = {"CTRL": "ctrl", "CONTROL": "ctrl", "SHIFT": "shift", "ALT": "alt", "SUPER": "logo", "META": "logo"}
+WTYPE_KEYS = {"RETURN": "Return", "ENTER": "Return", "ESC": "Escape", "ESCAPE": "Escape", "TAB": "Tab", "SPACE": "space",
+              "BACKSPACE": "BackSpace", "DELETE": "Delete", "UP": "Up", "DOWN": "Down", "LEFT": "Left", "RIGHT": "Right",
+              "HOME": "Home", "END": "End", "PAGEUP": "Prior", "PAGEDOWN": "Next"}
+
+
+def _wtype_chord(parts: list[str]) -> list[str]:
+    mods, key = [WTYPE_MODS.get(p, p.lower()) for p in parts[:-1]], parts[-1]
+    key = WTYPE_KEYS.get(key, key if len(key) > 1 and key[0] == "F" and key[1:].isdigit() else key.lower())
+    return [arg for m in mods for arg in ("-M", m)] + ["-k", key] + [arg for m in reversed(mods) for arg in ("-m", m)]
 
 
 @tool("Type text into the focused window as if from the keyboard. Focus the right window first.",

@@ -447,7 +447,8 @@ class Session:
         if decision.action == DENY:
             self.emit({"event": "denied", "episode": turn.episode if turn else None, "detail": detail, "reason": decision.reason})
             return "decline"
-        return "accept" if await self.decide_ask(f"{decision.reason}: {detail}" if decision.reason else detail, turn) else "decline"
+        # The reason is the headline (the spoken line); the exact command follows on its own line for the screen.
+        return "accept" if await self.decide_ask(f"{decision.reason}\n{detail}" if decision.reason else detail, turn) else "decline"
 
     async def decide_ask(self, summary: str, turn: Turn | None) -> bool:
         if turn:

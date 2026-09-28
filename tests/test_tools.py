@@ -54,6 +54,20 @@ class HyprTest(unittest.TestCase):
                 hypr.dispatch("hl.dsp.focus({ workspace = \"2\" })")
 
 
+class KeyChordTest(unittest.TestCase):
+    def test_wtype_fallback_chords(self):
+        from omni.tools.desktop import _wtype_chord
+        self.assertEqual(_wtype_chord(["CTRL", "L"]), ["-M", "ctrl", "-k", "l", "-m", "ctrl"])
+        self.assertEqual(_wtype_chord(["CTRL", "SHIFT", "C"]), ["-M", "ctrl", "-M", "shift", "-k", "c", "-m", "shift", "-m", "ctrl"])
+        self.assertEqual(_wtype_chord(["SUPER", "RETURN"]), ["-M", "logo", "-k", "Return", "-m", "logo"])
+        self.assertEqual(_wtype_chord(["ALT", "F4"]), ["-M", "alt", "-k", "F4", "-m", "alt"])
+
+    def test_a_command_approval_is_spoken_as_its_reason_only(self):
+        from omni.daemon import spoken_prompt
+        text = "delete files found by find\nfind /home/example/x -mindepth 1 -exec rm -rf -- {} +"
+        self.assertEqual(spoken_prompt("approval", text), "Should I delete files found by find?")
+
+
 class ResearchTest(unittest.TestCase):
     def test_scoreboard_parsing(self):
         payload = {"day": {"date": "2026-09-26"}, "events": [{"date": "2026-09-26T16:00Z", "competitions": [{
