@@ -1,3 +1,4 @@
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,7 +8,9 @@ from omni.policy import ALLOW, ASK, DENY, Policy, split_commands, unwrap_shell
 
 class PolicyTest(unittest.TestCase):
     def setUp(self):
-        self.home = Path(tempfile.mkdtemp())
+        # Not under /tmp: that is a safe root below, and on Linux mkdtemp() would put home inside it.
+        self.home = Path(tempfile.mkdtemp(dir="/var/tmp"))
+        self.addCleanup(shutil.rmtree, self.home, True)
         (self.home / "Downloads").mkdir()
         (self.home / "notes.txt").write_text("keep")
         self.data = self.home / ".local/share/omni"

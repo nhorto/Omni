@@ -21,7 +21,7 @@ Built from a Mac without Omarchy, so everything Hyprland-, PipeWire-, and speake
 | 2 Voice | Done in code. Mic loop, wake word, push-to-talk, hands-free, barge-in, ElevenLabs streaming, Piper fallback | Wake word, capture, transcription (0.66–0.88 s), and barge-in on synthetic speech through a fake mic | Everything with a real mic and speakers: `pw-record --raw` flag, Yealink echo, ElevenLabs streaming with Nick's voice, first-audio timing, CPU at idle, the Phase 2 acceptance list, training the "Omni" wake word (docs/voice.md) |
 | 3 Memory + skills | Done. Stores, tools, inline saving, retirement + reflection, app pages, legacy migration | Fact saved mid-turn, reflection on retirement, fresh thread recalled it; unit tests | Run migration against Nick's real `~/.local/share/omi/memory.sqlite3`; check a skill appears after a repeated multi-step task |
 | 4 Delegation + Claude | Done in code. Delegation (visible terminal; background Codex or Claude). Claude Agent SDK adapter (`omni/claude.py`) with the same tools (in-process MCP), policy (`can_use_tool`), memory, and skills (local plugin); Assistant switch in Settings | Background Codex and background Claude agents each fixed a bug in a scratch repo and reported back; Claude as the assistant saved a fact via the tools, answered scores from ESPN, first token 1.2 s warm | Visible mode in Foot; Phase 4 acceptance list; check Claude's user settings allow rules do not pre-approve anything on the deny list (they bypass `can_use_tool`) |
-| 5 Email | Not started | | Graph device-code sign-in and mail/calendar tools, per the Email section |
+| 5 Email | Gmail and Yahoo live; Microsoft 365 waiting on the Entra app. Local-first stack (mbsync + goimapnotify IDLE + notmuch + msmtp, aerc as terminal client); `omni/tools/mail.py` with search/read/draft/send/sync; `mail_send` asks with the full message; shell sending is on the ask list. See docs/email.md | Gmail fully synced (11.9k messages) and Yahoo syncing (Yahoo exposes only the newest 10k per folder and rate-limits); IDLE watchers and timer running; `omni ask` answered from mail (search ~10 ms); approved sends Yahoo→Gmail and Gmail→Yahoo delivered (Yahoo filed the second in Bulk); all three providers file SMTP mail in Sent themselves | Microsoft 365: Entra app registration + admin consent, then ortie browser sign-in and enabling the commented Outlook blocks. Then the intake/triage design (rules → quarantined classifier → proposals, facts table, local calendar, ntfy) once Nick approves it |
 
 Decisions made while building, which override the text further down where they differ:
 
@@ -35,7 +35,63 @@ Decisions made while building, which override the text further down where they d
 - **Claude runs with `ENABLE_TOOL_SEARCH=false`** so Omni's tools are called directly instead of through a deferred-tool search round trip. Its sessions load user settings (`setting_sources=["user"]`) so the Omarchy skill is available; permission allow rules there skip Omni's policy.
 - **Both adapters pre-warm** the foreground conversation when omnid starts.
 
-**Next steps, in order:** (1) install on the Omarchy box and run the Phase 1 and Phase 2 acceptance lists, fixing what breaks and recording timings in VALIDATION.md; (2) train the Omni wake word; (3) email.
+**Next steps, in order:** (1) install on the Omarchy box and run the Phase 1 and Phase 2 acceptance lists, fixing what breaks and recording timings in VALIDATION.md; (2) train the Omni wake word; (3) email; (4) the voice upgrade below: Phase 3 live check with Nick.
+
+## Voice upgrade (agreed 2026-09-27; phases 0–2 done, live check with Nick next)
+
+Goal: the ChatGPT voice-mode feel without leaving the local pipeline. Research (2026-09-27) found four reasons Omni feels slow: a fixed 1.0 s silence ends every turn; Whisper runs on the whole clip only after that; barge-in waits for silence plus Whisper before deciding; there is no echo cancellation. Nick chose to adopt open-source parts piece by piece (not a Pipecat/LiveKit rebuild, which would redo approvals, tools, and the speech gate). OpenAI's GPT-Live-1 (full-duplex voice in front, our Codex/Claude session behind it via client delegation, about $3 per open hour) is a later experiment, not part of this work.
+
+| Part | What | Owner file(s) |
+| --- | --- | --- |
+| B1 | PipeWire WebRTC echo cancellation, so Omni never hears itself on speakers | `integration/pipewire/`, `install.py`, `omni/doctor.py`, `docs/voice.md` (barge-in section) |
+| B2 | Smart Turn v3.x (pipecat-ai, BSD-2, 8 MB int8 ONNX, CPU): a short VAD pause asks the model whether the user finished | `omni/voice/turn.py`, `tests/test_turn.py` |
+| B3 | Streaming STT (Moonshine v2 streaming, MIT, CPU): transcribe while the user talks so the text is ready at end of turn; partials enable fast barge-in | `omni/voice/stt.py`, `tests/test_stt.py` |
+| B4 | Kyutai Pocket TTS as the offline voice (streams, ~200 ms first audio on CPU), Piper kept as last resort | `omni/voice/pocket.py`, fallback branch of `Speaker._synthesize` in `speak.py`, `tests/test_speech.py` |
+
+Machine facts that shape it: Ryzen 7 8745HS (16 threads), Radeon 780M and no CUDA, **11 GB RAM with ~3 GB free**, Python 3.14 venv with onnxruntime 1.30 and faster-whisper 1.2.1 already installed. Mic and speech both on the Yealink SP92 over Bluetooth (`mic_target`/`speaker_target` in `~/.config/omni/config.toml`); the default sink is the HDMI monitor, which is where the echo loop happened.
+
+### Phase 0: groundwork (orchestrator, sequential, ~1 h) — done 2026-09-27
+
+Done: seams (`turn.py`, `stt.py`), settings, `speech_end` timing (`endpoint`/`transcribe` in turn timings), `scripts/voice_bench.py`, baseline in VALIDATION.md. No checkpoint commit (not yet approved). Phase 1 agents launched the same day.
+
+
+Done before any agent starts, so the four parts never edit the same file.
+
+1. **Honest timing.** `t0` today is when capture ended, which hides the 1.0 s silence wait. Track `speech_end` (the last voiced chunk) in `listen.py`, pass it as `t0`, and add `endpoint` (capture end − speech end) and `transcribe` to the turn timings. Every later number is measured from when Nick actually stopped talking.
+2. **Seams in `listen.py`.** Move the end-of-turn decision behind `turn.py` (`SilenceTurn`: `reset()`, `update(chunk, prob, silence) -> done`, today's behavior) and transcription behind `stt.py` (`Transcriber.load()`, `start() -> Stream`, `Stream.feed(chunk)`, `Stream.partial()`, `Stream.finish() -> str`; `WhisperBatch` is today's behavior). `listen.py` picks the implementation from settings and does not change again until Phase 2.
+3. **Settings, once.** Add to `config.py`: `turn_detector = "silence"` (`"smart"`), `turn_threshold = 0.5`, `turn_max_silence = 2.0`, `stt = "whisper"` (`"moonshine"`), `stt_model = ""`, `offline_voice = "piper"` (`"pocket"`). Defaults keep today's behavior; Phase 2 flips them after the numbers are in.
+4. **Bench harness.** `scripts/voice_bench.py` runs the real `VoiceLoop` capture path on WAV files (a `mic_command` setting replaces `pw-record`; a stub session records `ask()` text and timestamps). It prints per-utterance endpoint ms, transcribe ms, transcript, name detected, and premature cut-offs. Test utterances are synthesized (ElevenLabs or Piper) into `$OMNI_RUNTIME/bench/`, never the repo: short commands, long questions, sentences with a mid-thought pause ("Omni, remind me to… um… call the garage tomorrow"), bare "Omni" then the request, and yes/no approval answers.
+5. **Baseline.** Run the bench and one live `omni ask`, record numbers in VALIDATION.md. Unit tests green.
+6. **Checkpoint commit** of the current tree (only with Nick's OK), so any part can be rolled back.
+
+### Phase 1: four agents in parallel (~2–3 h wall clock)
+
+All work in the same checkout on their own files (table above). None edit `listen.py`, `config.py`, `requirements.txt`, `PLAN.md`, or `VALIDATION.md`; each reports needed dependencies and numbers back and the orchestrator merges them. Models and voice samples live under `~/.local/share/omni/models/` (downloaded on first use, checksum pinned), never in the repo. No commits. Test against a dev daemon with `OMNI_DATA`/`OMNI_CONFIG`/`OMNI_RUNTIME`, not the live `omnid`. Each ends with `python3 -m unittest discover -s tests` green.
+
+- **B1 Echo cancellation.** Write `integration/pipewire/omni-echo-cancel.conf` (`libpipewire-module-echo-cancel`, `aec/libspa-aec-webrtc`, source and sink named `omni-echo-cancel-*`, pinned to the Yealink with `target.object` so other apps and the default devices are untouched), install it from `install.py`, add a doctor check. Measure with the bench: play 20 s of Omni speech through the echo-cancel sink on the Yealink and on the HDMI monitor, record the raw mic and the echo-cancel source, compare Silero speech fraction and level. Also decide whether the Yealink's own hardware AEC is enough on its own (software AEC on top can hurt). Check every playback path (mpv, pw-play, Pocket) honors `speaker_target`. Restarting PipeWire briefly drops audio and may reconnect the Bluetooth device: warn Nick with a notification first. *Accept:* 0 barge-in triggers during 20 s of Omni speech with nobody talking, on both speaker setups; real speech over it still reaches VAD.
+- **B2 Smart Turn.** `SmartTurn` in `turn.py`: after 0.2 s of VAD silence, run the model on the last ≤8 s of the utterance; end the turn if p ≥ `turn_threshold`, otherwise re-check as the silence grows and fall back to `turn_max_silence`. The hotkey still ends a turn at once. Compute Whisper log-mel features with `faster_whisper.feature_extractor` instead of pulling in `transformers`; prove parity against the reference extractor in a throwaway venv under `/tmp`. Measure inference time on this CPU; if it would stall the mic thread, run it on a worker. *Accept on the bench:* median endpoint ≤ 400 ms on finished sentences, no cut-offs on mid-thought pauses, short answers ("yes", "go ahead") end fast, idle CPU unchanged.
+- **B3 Streaming STT.** First confirm Moonshine v2 streaming installs on Python 3.14 with onnxruntime 1.30, and measure its resident memory (3 GB free). If it is not viable, fall back to incremental faster-whisper (re-transcribe the growing buffer about once a second on a worker so `finish()` only covers the tail) and say why. Evaluate against `WhisperBatch` on the bench: accuracy against the known text, "Omni" detected as the first word (the wake-by-name feature depends on it, and Whisper needed a prompt to hear it), transcript ready after endpoint, CPU while listening. Propose `WAKE_PHRASES` aliases for any consistent mishearing of the name. *Accept:* transcript ≤ 150 ms after endpoint, accuracy no worse than `base.en`, name detected on ≥ 95% of bench utterances.
+- **B4 Pocket TTS.** Check the `pocket-tts` package and its dependencies. If it needs torch, keep it out of omnid's venv: a separate venv under `~/.local/share/omni/` running a small local server that streams PCM, started on demand when ElevenLabs fails and kept warm ten minutes. Stream raw PCM into `pw-play` so the first word plays before synthesis finishes. Order: ElevenLabs → Pocket → Piper. Option to try: clone Nick's ElevenLabs voice from a short sample generated once and kept under `~/.local/share/omni/`, so the fallback sounds like the main voice. *Accept:* with `speech_provider = "pocket"`, first audio ≤ 400 ms per sentence warm, cold start recorded; Piper still used when Pocket is missing.
+
+**Results (2026-09-27).** All four met their bar; details in VALIDATION.md and docs/voice.md.
+
+- B1: echo cancel is installed and live. Nick chose speech on the monitor through `omni-echo-cancel-sink`, with the Yealink as mic through `omni-echo-cancel-source` (0 self-barge-ins once converged). The Yealink's own AEC leaks about −55 dBFS on 3 of 10 runs, so barge-in also needs 8 chunks averaging ≥ `barge_floor` (−45 dBFS).
+- B2: Smart Turn v3.2 in `smart_turn.py` asks once per pause (p rises with silence alone, so re-checking would cut mid-thought pauses), `turn_max_silence = 1.5`, replies fall back after 0.7 s. It has its own mel code because importing `faster_whisper` from two threads at startup deadlocks.
+- B3: Moonshine v2 small-streaming (`moonshine-voice==0.1.5`, own onnxruntime, +200 MB RAM, one core). Hears "Omni" unprompted; `WAKE_PHRASES` gained its spellings and `CALLED` catches "…, Omni, stop" mid-sentence.
+- B4: Pocket TTS 3.3.0 in `~/.local/share/omni/pocket-venv` via `integration/pocket/server.py`, about 70 ms to first audio warm. No voice clone: Nick's ElevenLabs voice is a library voice, so cloning it is not allowed; Nick picks a stock voice (`pocket_voice`) in Phase 3.
+
+### Phase 2: integration (orchestrator, ~1–2 h) — done 2026-09-27
+
+Defaults flipped (`stt = "moonshine"`, `turn_detector = "smart"`, `offline_voice = "pocket"`), installer and doctor steps added, omnid restarted on them. Barge-in now interrupts as soon as a streaming partial calls Omni by name. After a bare "Omni" ends a capture, the next utterance within 4 s counts as addressed. Bench, ElevenLabs voice: text ready 524 ms after speech ends (was 1419), 0 cut-offs (was 1–2), name 14/14. Left for Phase 3: the barge-in stop time on real speech, `barge_floor` against Nick's voice, and the Pocket voice choice.
+
+
+1. Add the dependencies (`requirements.txt`, `install.py`), flip the defaults for parts that met their bar, restart `omnid`, re-run the bench and compare with the baseline.
+2. **Fast barge-in.** With echo cancellation and streaming partials in place, run `talk_over()` on each partial while Omni is speaking and act as soon as it says stop or ask, instead of after the endpoint and a full transcription. *Accept:* speech stops within ~300 ms of "Omni, stop" ending; room talk and Omni's own voice never stop it.
+3. `scripts/check_public.py`, full tests, then update this section, the Voice pipeline section, docs/voice.md, and VALIDATION.md.
+
+### Phase 3: live check with Nick (~30 min)
+
+Real voice on the Yealink and on the monitor speakers: five normal requests, a sentence with a long thinking pause, talking over a long answer, "Omni, stop", a voice approval, and the network off (Pocket speaks). Tune `turn_threshold` and `turn_max_silence` from what he says, then record the final numbers.
 
 ## Decisions (from Nick, 2026-09-27)
 
@@ -120,10 +176,10 @@ Approval is spoken and visual at once: Omni says the one-line summary and asks; 
 
 ## Voice pipeline
 
-- **Wake word**: openWakeWord running on the always-on mic stream (CPU, a few percent). Train a custom "Omni" model with their Colab notebook (takes about an hour; document the steps in `docs/wake-word.md`). Until it exists, ship with a built-in model such as "hey Jarvis" so the loop is testable. Picovoice Porcupine is the fallback if openWakeWord's accuracy is poor for this microphone; note it needs a free personal access key.
-- **Listening**: after wake word or hotkey, Silero VAD segments the utterance, 1.0 s trailing silence ends it. faster-whisper transcribes locally. No files, no polling. Voxtype stays installed for text dictation only; the `omi-dictate` guard script goes away because the mic ownership is explicit.
-- **Speaking**: ElevenLabs streaming input (WebSocket) fed sentence by sentence from the agent's text delta stream; audio piped straight to playback. Piper remains for offline or when the key fails. Speech is on for question turns, off for action turns; enforce with the system prompt plus a guard that drops trailing acknowledgments like "Done." or "Opening that now." after a tool-only turn.
-- **Barge-in**: while speaking, keep VAD on the mic. Speech detected → stop playback, send `turn/interrupt` to the app-server, start listening. Enable PipeWire's echo-cancel module (`libpipewire-module-echo-cancel`) so Omni's own voice does not trigger VAD; verify with the Yealink SP92, which has hardware echo cancellation and may make this unnecessary.
+- **Wake word**: "Omni", detected by name in local Whisper transcripts of each utterance (prompted with the name so it is not heard as "on me"). No training needed; the request can follow the name in one breath. A trained openWakeWord model (Colab, about an hour; `docs/voice.md`) remains an option to cut CPU while others talk nearby, selected with `wake_model`. Picovoice Porcupine is the fallback if accuracy is poor; it needs a free personal access key.
+- **Listening**: after wake word or hotkey, Silero VAD segments the utterance and Smart Turn decides at each short pause whether it is finished (`turn.py`, `smart_turn.py`). Moonshine transcribes while Nick talks (`stt.py`, `moonshine.py`); faster-whisper is the fallback. No files, no polling. Voxtype stays installed for text dictation only; the `omi-dictate` guard script goes away because the mic ownership is explicit.
+- **Speaking**: ElevenLabs per-sentence HTTP streaming fed from the agent's text delta stream; audio piped straight to playback. Pocket TTS speaks when ElevenLabs fails, Piper while Pocket loads or if it is missing. Speech is on for question turns, off for action turns; enforce with the system prompt plus a guard that drops trailing acknowledgments like "Done." or "Opening that now." after a tool-only turn.
+- **Barge-in**: while speaking, keep VAD on the mic. Loud sustained speech starts a capture; as soon as the streaming transcript calls Omni by name, playback stops and the turn is interrupted, and the finished utterance becomes the stop or the new request. PipeWire's echo-cancel module keeps Omni's own voice out of the mic (docs/voice.md).
 - **Indicator**: keep the bar item and floating card. States: idle, listening, thinking, working, speaking, awaiting approval. The daemon writes `status.json`; nothing else does.
 
 ## The app
@@ -169,9 +225,9 @@ Migrate the existing `memory` and `knowledge` tables into `USER.md`/`MEMORY.md` 
 - `mode: "background"` starts a separate app-server thread (or Claude SDK session) with the task, headless, in `cwd`. Omni receives the final message and speaks a one-line summary or drops a report in `~/Documents/Omni Reports/<date>-<slug>.md` for long results. Background work is logged as its own episode.
 - Default mode comes from the request ("in a terminal", "so I can watch" → visible) and a Settings default. Background delegations count against the same daily budget and show in Activity while running, with a Stop button.
 
-## Email (later phase)
+## Email
 
-Microsoft Graph with delegated device-code sign-in, least-privilege `Mail.Read`, `Mail.Send` (send only), `Calendars.Read`. Tools: `mail.search`, `mail.read`, `mail.draft`, `mail.send` (deny-list, always asks with the exact recipient/subject/body), `calendar.upcoming`. Delta queries for an hourly intake that proposes reminders. The current Outlook-web Playwright adapter is deleted; it was an interim hack.
+Decided 2026-09-27 with Nick: a local-first IMAP stack rather than Microsoft Graph, for all three accounts (Microsoft 365 work first, Gmail, Yahoo). Mail syncs into `~/Mail` with mbsync, arrives by IMAP IDLE (goimapnotify), is indexed by notmuch, and is sent with msmtp. Graph push needs a public webhook, so on a laptop it would mean polling, and it covers only Outlook; it stays the fallback if IMAP is ever blocked. Nick is the tenant admin, so Microsoft 365 uses Omni's own Entra app with admin consent and the browser auth-code flow; Microsoft's 2025 defaults block device-code sign-in. Gmail and Yahoo use app passwords in the keyring. Omni may search, read, and draft freely; sending always asks with the exact recipients, subject, and body. Moving, archiving, and deleting are not tools yet. Nick reads mail through Omni plus notifications, or aerc. Setup and file layout: [docs/email.md](docs/email.md). Still to do: an intake that proposes reminders from new mail (from the notmuch post-new hook, not polling) and `calendar.upcoming`.
 
 ## Phases and acceptance
 

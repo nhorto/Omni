@@ -369,7 +369,7 @@ class Session:
             await runner.close()
 
     async def ask(self, text: str, *, source: str = "text", speak: bool | None = None, t0: float | None = None,
-                  ref: str | None = None) -> dict:
+                  ref: str | None = None, timings: dict | None = None) -> dict:
         text = text.strip()
         if not text:
             raise ValueError("Empty request")
@@ -380,7 +380,8 @@ class Session:
             if self.speaker:
                 self.speaker.stop()
             episode = self.memory.start_episode(text, source=source, agent=self.settings.agent)
-            turn = Turn(text, source, episode, SpeechGate(self.speaker, speak), t0 or time.monotonic())
+            turn = Turn(text, source, episode, SpeechGate(self.speaker, speak), t0 or time.monotonic(),
+                        timings=dict(timings or {}))  # voice: endpoint and transcribe, measured before the turn
             self.current = turn
             self.emit({"event": "turn.started", "episode": episode, "request": text, "source": source, "speak": speak, "ref": ref})
             try:
@@ -424,7 +425,7 @@ class Session:
     async def call_tool(self, name: str, arguments: dict, turn: Turn | None, runner: Runner) -> dict:
         spec = self.tools.get(name)
         if spec and spec.ask:
-            approved = await self.decide_ask(f"{name}: {summarize_args(arguments)}", turn)
+            approved = await self.decide_ask(tools.approval_text(spec, arguments), turn)
             if not approved:
                 return {"success": False, "contentItems": [{"type": "inputText", "text": "Nick declined this action."}]}
         loop = asyncio.get_running_loop()
@@ -531,6 +532,3 @@ def pick_fast_model(models: list[dict]) -> str | None:
             return model["id"]
     return next((m["id"] for m in models if m.get("isDefault")), None)
 
-
-def summarize_args(arguments: dict) -> str:
-    return ", ".join(f"{k}={str(v)[:80]}" for k, v in arguments.items())

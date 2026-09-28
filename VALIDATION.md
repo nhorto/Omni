@@ -2,6 +2,52 @@
 
 Live checks for the rebuild, newest first. Record the machine, CLI versions, and timings. Timings come from `omni ask` output or the Activity page and are measured from when omnid receives the request (for voice, from the end of speech).
 
+## 2026-09-27 · Voice upgrade after phases 1–2 (Omarchy desktop, `scripts/voice_bench.py`, quiet machine)
+
+Same bench, 19 cases, times from when speech ended. Mid-thought pauses are now spliced into one synthesized sentence (the old per-fragment synthesis ended each fragment with falling intonation, which no end-of-turn model should accept). "Before" = `silence` + `whisper`; "after" = the new defaults (`smart` + `moonshine`).
+
+| Measure | Before, Piper | Before, ElevenLabs | After, ElevenLabs |
+| --- | --- | --- | --- |
+| End of turn (endpoint median) | 1047 ms | 1035 ms | **319 ms** |
+| Transcription after end of turn (median) | 454 ms | 384 ms | **195 ms** (149 ms with Moonshine multi-threaded) |
+| Text ready for the agent (median) | 1487 ms | 1419 ms | **524 ms** |
+| Cut-offs on mid-thought pauses | 1 | 1–2 | **0** |
+| Name heard | 10/14 | 12/14 | **14/14** |
+| Mean word error rate | 0.254 | 0.167 | **0.021** |
+
+Moonshine alone (1.0 s silence endpoint): transcription median 4–5 ms after the turn ends on a quiet machine, 677 ms (up to 1.8 s) during an Android build at load 25, because it runs on one core. Smart Turn inference 15–60 ms per pause. Pocket TTS: first audio 66 ms median warm, cold start 4–9 s, 660 MB while warm. Echo cancellation: see docs/voice.md. omnid resident memory after the switch: about 610 MB (Moonshine adds about 200 MB).
+
+## 2026-09-27 · Voice upgrade baseline (Omarchy desktop, `scripts/voice_bench.py`)
+
+Before the voice upgrade (PLAN.md "Voice upgrade"). The bench plays 19 Piper-synthesized utterances in real time through the real `VoiceLoop` (FIFO via `mic_command`, stub session); times are from when the audio's speech ended. Settings: `turn_detector = "silence"` (1.0 s), `stt = "whisper"` (`base.en` int8).
+
+| Measure | Result |
+| --- | --- |
+| End of turn detected (endpoint) | median 1047 ms (answers "yes"/"go ahead" 1054 ms) |
+| Transcription after end of turn | median 392 ms (300–760 ms) |
+| Text ready for the agent | median 1446 ms after the speaker stopped |
+| Mid-thought pause of 1.2 s ("Omni, what's the … what's the capital of Australia?") | cut in two; the second half is dropped as not addressed to Omni |
+| Name heard (wake by name) | 8/14: Whisper drops a leading "Omni" before some long sentences, even on the full clip |
+
+Fixed while building the bench: a pipe read shorter than one chunk ended the capture mid-utterance (`_chunks_continuing`), and the 0.6 s pre-roll lost "Omni," when a pause followed it (now 1.0 s).
+
+## 2026-09-27 · Omarchy desktop (Hyprland, 16 cores, Python 3.14.7) · codex-cli 0.157.1 · model gpt-6-luna
+
+First install on the Omarchy machine, replacing the old `omi-voice` service and bindings.
+
+| Check | Target | Result |
+| --- | --- | --- |
+| `install.py --apply` | clean | Failed at first: openwakeword requires `tflite-runtime` on Linux, which has no wheels past 3.11. Fixed by installing openwakeword `--no-deps` (Omni only uses ONNX) |
+| Unit tests | all pass | 3 policy tests failed on Linux only: `mkdtemp()` put the fake home under `/tmp`, a safe root. Test now uses `/var/tmp`; 31 pass |
+| `omni doctor` | all ✓ except optional | All ✓, including ElevenLabs key and voice from the keyring |
+| Legacy migration | old memories appear | "migrated 6 legacy records" |
+| `omni ask "what time is it"` warm | first token ≤ 1.5 s | 1.14 s warm (isolated daemon); 4.4 s first turn on a fresh thread |
+| "Go to workspace 3, open a terminal on the left and run pwd, and another on the right and run date" | ≤ 6 s, no prompts, both placed | 4.2 s, first token 0.85 s, two `terminal_open` calls, placed left and right, no prompts |
+| Idle CPU of omnid with wake word on | a few percent of one core | 20% at first: pysilero-vad's bundled libgomp busy-waits between 32 ms calls. `OMP_WAIT_POLICY=PASSIVE` in `listen.py` brings it to ~6% (VAD alone 43% → 3%; whisper 5 s clip 0.36 → 0.39 s) |
+| Bar indicator | shows Omni | `local.omni` plugin shows "Omni" |
+| Keys | no conflicts | Super+Ctrl+H was Omarchy's Hardware menu; `omni.lua` now unbinds it for Stop Omni |
+| "What are the college football scores today" (voice) | sourced answer, no loop | Looped at first. Speech played on the monitor's HDMI speakers while the mic was the Yealink, so its echo cancellation could not help: Omni heard its own words ("College football.", "Sorry.", "I'm doing well.") as barge-ins and answered them. After routing speech to the Yealink (`speaker_target`), room conversation still barged in and became requests. Fixed with `talk_over()`: while Omni speaks, only a stop phrase or speech starting with its name/wake word interrupts; echoes (stem overlap with recent spoken text) and other speech are ignored. Retest: full six-sentence answer played; one room phrase and one leaked echo ("Michigan 2019 and people…") were ignored. First token 6.4 s with one `sports_scores` call, above the 5 s first-audio target |
+
 ## 2026-09-27 · MacBook (macOS, no Hyprland) · codex-cli 0.157.1 · model gpt-6-luna
 
 What could run off-Omarchy, run against a real Codex account with an isolated `OMNI_DATA`/`OMNI_CONFIG`/`OMNI_RUNTIME`.

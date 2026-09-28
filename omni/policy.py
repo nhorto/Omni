@@ -24,6 +24,7 @@ DEFAULT_ASK = {
     "omarchy-pkg-aur-add", "omarchy-update", "omarchy-reinstall",
     "shutdown", "reboot", "poweroff", "halt", "systemctl", "loginctl",
     "dd", "shred", "wipefs", "mkfs", "fdisk", "parted", "crontab",
+    "msmtp", "sendmail",
 }
 # Subcommands of an ask-listed program that only read state.
 READ_ONLY_SUBCOMMANDS = {
@@ -37,6 +38,8 @@ READ_ONLY_SUBCOMMANDS = {
     "loginctl": {"show-session", "list-sessions", "session-status"},
 }
 DELETERS = {"rm", "rmdir", "unlink", "trash", "trash-put", "gio", "srm"}
+# himalaya reads freely; these words send mail or remove it from the server.
+HIMALAYA_ASK = {"send", "reply", "forward", "write", "delete", "expunge", "purge", "smtp"}
 GIT_ASK = [("push",), ("reset", "--hard"), ("clean",), ("branch", "-D"), ("filter-branch",), ("filter-repo",)]
 WRAPPERS = {"command", "builtin", "exec", "nohup", "time", "nice", "ionice", "env", "stdbuf", "timeout", "xargs", "setsid", "uwsm-app", "uwsm"}
 SHELLS = {"sh", "bash", "zsh", "dash", "fish"}
@@ -102,6 +105,8 @@ class Policy:
             if _read_only(program, argv):
                 return Decision(ALLOW)
             return Decision(ASK, f"run {program} ({' '.join(argv[1:4])})".strip())
+        if program == "himalaya" and HIMALAYA_ASK & set(argv[1:]):
+            return Decision(ASK, "send or delete mail with himalaya")
         if program == "git":
             args = [a for a in argv[1:] if not a.startswith("-C")]
             for pattern in GIT_ASK:

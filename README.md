@@ -31,7 +31,7 @@ Then follow the printed steps: add `require("hypr.omni")` to `~/.config/hypr/hyp
 | Super+Alt+H | Hands-free listening on/off |
 | Super+Ctrl+H | Stop speaking and interrupt |
 
-The default wake word is "hey Jarvis" until a custom "Omni" model is trained; see [docs/voice.md](docs/voice.md).
+The wake word is "Omni": say "Omni, open Files" in one breath, or "Omni" and then the request. See [docs/voice.md](docs/voice.md).
 
 ## From a terminal
 

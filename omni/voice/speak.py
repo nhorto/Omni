@@ -1,4 +1,4 @@
-"""Sentence-chunked streaming speech: ElevenLabs first, Piper as the offline fallback.
+"""Sentence-chunked streaming speech: ElevenLabs first, then Pocket TTS or Piper offline.
 
 The agent's reply arrives as text deltas. `Chunker` cuts it into sentences; the
 `Speaker` fetches audio for the next sentence while the current one plays, and
@@ -16,10 +16,13 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import urllib.request
+from collections import deque
 from pathlib import Path
 
 from .. import config
+from . import pocket
 
 log = logging.getLogger("omni.speak")
 SENTENCE_END = re.compile(r"(?<=[.!?…])[\"')\]]*\s+(?=[A-Z0-9\"'(]|$)|\n{1,}")
@@ -59,6 +62,64 @@ def clean(text: str) -> str:
     return " ".join(text.split())
 
 
+ECHO_OVERLAP = 0.6
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9']+", text.lower())
+
+
+def is_echo(heard: str, spoken: str) -> bool:
+    """True when a barge-in transcript is mostly Omni's own recent words picked up by the mic."""
+    # Compare four-letter stems: transcribing a speaker through a room drifts endings ("worries" -> "worry").
+    heard_words, spoken_stems = _words(heard), {word[:4] for word in _words(spoken)}
+    if not heard_words or not spoken_stems:
+        return False
+    return sum(word[:4] in spoken_stems for word in heard_words) / len(heard_words) >= ECHO_OVERLAP
+
+
+# Moonshine hears the name as "Amni" and fuses "hey Omni" into "Hayamani"; it also writes "Omni:" and "Omni-".
+WAKE_PHRASES = re.compile(r"^\s*((hey|hay|hi|ok|okay)[, ]+)?(omni|omnie|omny|omi|amni|ha[iy]?[ao]m[aio]n[iy]e?|jarvis)\b"
+                          r"[-,.!?:;]*\s*", re.I)
+CALLED = re.compile(r"\b(omni|omnie|omny)[,:!]\s*", re.I)  # the name called mid-sentence: "Yeah sounds good, Omni, stop."
+STOP_PHRASES = re.compile(r"^(stop|wait|hold on|never ?mind|cancel|quiet|enough|that's enough|shut up|thanks|thank you|"
+                          r"ok(ay)?,? (stop|thanks|thank you))\b", re.I)
+
+
+def addressed(heard: str) -> str | None:
+    """The request in an utterance that calls Omni by name, or None if it is not for Omni.
+
+    The name may start the utterance or a later sentence ("Yeah, sounds good. Omni, stop."),
+    so a request is not lost when it follows other talk in the same breath.
+    """
+    for sentence in re.split(r"(?<=[.!?])\s+", heard.strip()):
+        if WAKE_PHRASES.match(sentence):
+            start = heard.index(sentence)
+            return WAKE_PHRASES.sub("", heard[start:], count=1).strip()
+    # The transcriber does not always mark the sentence break before the name.
+    if match := CALLED.search(heard):
+        return heard[match.end():].strip()
+    return None
+
+
+def talk_over(heard: str, spoken: str) -> tuple[str, str]:
+    """Decide what speech heard while Omni is talking means: ("ignore" | "stop" | "ask", request).
+
+    Only speech addressed to Omni counts. Room conversation, calls, videos, and Omni's own
+    voice leaking into the mic are ignored, so none of them can cut an answer off or loop.
+    """
+    text = heard.strip()
+    if not _words(text) or is_echo(text, spoken):
+        return "ignore", ""
+    request = addressed(text)
+    rest = text if request is None else request
+    if STOP_PHRASES.match(rest) and len(_words(rest)) <= 4:
+        return "stop", ""
+    if request is not None:
+        return ("ask", rest) if _words(rest) else ("stop", "")
+    return "ignore", ""
+
+
 def elevenlabs_key() -> str:
     if key := os.environ.get("ELEVENLABS_API_KEY"):
         return key
@@ -87,6 +148,22 @@ def player_argv(target: str | None = None) -> list[str] | None:
     return None
 
 
+ELEVENLABS_RETRY = 30  # seconds offline after an ElevenLabs failure, so each sentence does not wait on it
+POCKET_COLD = 60       # seconds to wait for Pocket to load when it is the chosen voice
+
+
+def play_argv(kind: str, target: str | None = None, rate: int = 24000) -> list[str]:
+    """The player for one synthesized sentence: raw PCM and WAV go to pw-play, MP3 to mpv."""
+    targeting = [f"--target={target}"] if target else []
+    if kind == "pcm":
+        return ["pw-play", "--raw", "--format=s16", f"--rate={rate}", "--channels=1", *targeting, "-"]
+    if kind == "wav" and shutil.which("pw-play"):
+        return ["pw-play", *targeting, "-"]
+    if argv := player_argv(target):
+        return argv
+    raise RuntimeError("Install mpv to play speech")
+
+
 class Speaker:
     def __init__(self, settings, on_state=lambda speaking: None):
         self.settings = settings
@@ -96,7 +173,10 @@ class Speaker:
         self._player: subprocess.Popen | None = None
         self._worker: asyncio.Task | None = None
         self._key: str | None = None
+        self._elevenlabs_retry = 0.0  # monotonic time before which ElevenLabs is skipped after a failure
+        self._pocket: pocket.Pocket | None = None
         self.speaking = False
+        self._recent: deque[tuple[float, str]] = deque(maxlen=8)  # (when, sentence) for echo checks
 
     def start(self) -> None:
         self._worker = asyncio.create_task(self._run())
@@ -112,6 +192,12 @@ class Speaker:
             self.queue.get_nowait()
         if self._player and self._player.poll() is None:
             self._player.kill()
+        self._set_speaking(False)
+
+    def recent_text(self, seconds: float = 30) -> str:
+        """What Omni has said lately, including the sentence playing now."""
+        cutoff = time.monotonic() - seconds
+        return " ".join(sentence for when, sentence in self._recent if when >= cutoff)
 
     @property
     def busy(self) -> bool:
@@ -129,8 +215,11 @@ class Speaker:
                 generation = self._generation
                 audio = loop.run_in_executor(None, self._synthesize, sentence)
             if generation != self._generation:
+                if self.queue.empty():
+                    self._set_speaking(False)  # a stale prefetch must not leave Omni "speaking" forever
                 continue
             self._set_speaking(True)
+            self._recent.append((time.monotonic(), sentence))
             try:
                 chunks = await audio
                 if not self.queue.empty():
@@ -148,17 +237,29 @@ class Speaker:
             self.speaking = value
             self.on_state(value)
 
-    # Synthesis returns an iterator of audio bytes plus its format; playback consumes it.
+    # Synthesis returns (format, iterator of audio bytes[, sample rate]); playback consumes it.
+    # Order: ElevenLabs, then Pocket when it is the offline voice (or forced), then Piper.
     def _synthesize(self, sentence: str):
         provider = self.settings.speech_provider
-        if provider == "elevenlabs" and self.settings.elevenlabs_voice_id:
+        if provider == "elevenlabs" and self.settings.elevenlabs_voice_id and time.monotonic() >= self._elevenlabs_retry:
             if self._key is None:
                 self._key = elevenlabs_key()
             if self._key:
                 try:
                     return ("mp3", self._elevenlabs(sentence))
                 except OSError as exc:
-                    log.warning("ElevenLabs failed, using Piper: %s", exc)
+                    self._elevenlabs_retry = time.monotonic() + ELEVENLABS_RETRY
+                    log.warning("ElevenLabs failed, using the offline voice for %d s: %s", ELEVENLABS_RETRY, exc)
+        if provider == "pocket" or self.settings.offline_voice == "pocket":
+            if self._pocket is None:
+                self._pocket = pocket.Pocket(voice=self.settings.extra.get("pocket_voice", ""))
+            if self._pocket.available():
+                # Forced Pocket waits out a cold start; as a fallback, Piper covers it while Pocket warms up.
+                try:
+                    return ("pcm", self._pocket.stream(sentence, wait=POCKET_COLD if provider == "pocket" else 0),
+                            self._pocket.rate)
+                except (OSError, RuntimeError) as exc:
+                    log.info("Pocket unavailable, using Piper: %s", exc)
         return ("wav", self._piper(sentence))
 
     def _elevenlabs(self, sentence: str):
@@ -194,14 +295,14 @@ class Speaker:
         return iter([data])
 
     def _play(self, synthesized, generation: int) -> None:
-        kind, chunks = synthesized
-        target = self.settings.extra.get("speaker_target")
-        if kind == "wav" and shutil.which("pw-play"):
-            argv = ["pw-play", *([f"--target={target}"] if target else []), "-"]
-        else:
-            argv = player_argv(target)
-        if not argv:
-            raise RuntimeError("Install mpv to play speech")
+        kind, chunks = synthesized[:2]
+        try:
+            self._pipe(play_argv(kind, self.settings.extra.get("speaker_target"), *synthesized[2:]), chunks, generation)
+        finally:
+            if close := getattr(chunks, "close", None):
+                close()  # a streaming source stops generating (Pocket cancels the request)
+
+    def _pipe(self, argv: list[str], chunks, generation: int) -> None:
         self._player = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         assert self._player.stdin
         try:

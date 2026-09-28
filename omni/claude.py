@@ -85,7 +85,7 @@ class ClaudeRunner:
         turn = self.turn
         if name.startswith("mcp__omni__"):
             spec = tools.REGISTRY.get(name.removeprefix("mcp__omni__"))
-            if spec and spec.ask and not await self.session.decide_ask(f"{spec.name}: {arguments}", turn):
+            if spec and spec.ask and not await self.session.decide_ask(tools.approval_text(spec, arguments), turn):
                 return PermissionResultDeny(message="Nick declined this action.")
             return PermissionResultAllow(updated_input=arguments)
         if name == "Bash":

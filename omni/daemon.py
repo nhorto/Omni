@@ -203,9 +203,10 @@ class Daemon:
         return True
 
     async def _notify_prompt(self, ident: str, kind: str, text: str) -> None:
-        # Mako (Omarchy's notifier) does not draw action buttons, so also raise the popover,
-        # whose approval card has Approve/Cancel. A no-op if the app is not running.
-        if shutil.which("gapplication"):
+        # Approvals are answered from the notification's Approve/Cancel actions (or by voice);
+        # raising the popover for them covers whatever Nick is doing. Questions need a typed
+        # or spoken answer, so those still raise it. A no-op if the app is not running.
+        if kind != "approval" and shutil.which("gapplication"):
             subprocess.Popen(["gapplication", "action", "dev.omni.Omni", "quick-ask"],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if not shutil.which("notify-send"):
@@ -226,10 +227,13 @@ class Daemon:
             self.answer(ident, choice)
 
     async def _voice_prompt(self, ident: str, kind: str, text: str) -> None:
-        question = f"Should I {text}?" if kind == "approval" else text
-        self.speaker.say(question)
-        while self.speaker.busy:
-            await asyncio.sleep(0.05)
+        self.speaker.say(spoken_prompt(kind, text))
+        try:
+            while self.speaker.busy:
+                await asyncio.sleep(0.05)
+        except asyncio.CancelledError:
+            self.speaker.stop()  # answered by click while still asking: stop talking at once
+            raise
         heard = await self.voice.listen_once(timeout=PROMPT_TIMEOUT - 5)
         if not heard:
             return
@@ -295,6 +299,12 @@ class Daemon:
 
 
 # ---- operations -------------------------------------------------------------------------
+
+def spoken_prompt(kind: str, text: str) -> str:
+    """The line Omni says aloud for a prompt: only the first line, so an email body stays on screen."""
+    headline = (text.strip().splitlines() or [""])[0]
+    return f"Should I {headline.rstrip('.:')}?" if kind == "approval" else headline
+
 
 async def op_ask(daemon: Daemon, request: dict, send) -> dict:
     ref = uuid.uuid4().hex

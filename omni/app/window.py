@@ -471,7 +471,7 @@ class SettingsPage(Gtk.Box):
         speech = Adw.SwitchRow(title="Speak answers", subtitle="Omni stays quiet after actions unless it asks something",
                                active=s["speech"])
         speech.connect("notify::active", lambda row, _p: self._set("speech", row.get_active()))
-        wake = Adw.SwitchRow(title="Wake word", subtitle=f"Model: {s['wake_model']}", active=s["wake_word"])
+        wake = Adw.SwitchRow(title="Wake word", subtitle='Say “Omni, …”' if s['wake_model'].lower() == "omni" else f"Model: {s['wake_model']}", active=s["wake_word"])
         wake.connect("notify::active", lambda row, _p: (self._set("wake_word", row.get_active()),
                                                         self.bridge.call("voice", setting="wake", value=row.get_active())))
         continuous = Adw.SwitchRow(title="Hands-free (continuous) listening", subtitle="Any speech becomes a request")

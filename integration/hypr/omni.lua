@@ -11,7 +11,9 @@ o.bind("SUPER + H", "Omni quick ask", "gapplication action dev.omni.Omni quick-a
 o.bind("SUPER + SHIFT + H", "Talk to Omni", bin .. "omni listen")
 -- Hands-free: every utterance becomes a request until toggled off.
 o.bind("SUPER + ALT + H", "Omni hands-free listening", bin .. "omni voice continuous")
--- Stop speaking / interrupt the current task.
+-- Stop speaking / interrupt the current task. Replaces Omarchy's Hardware menu binding
+-- (still reachable from the Omarchy menu).
+hl.unbind("SUPER + CTRL + H")
 o.bind("SUPER + CTRL + H", "Stop Omni", bin .. "omni stop")
 
 o.window({ class = "^dev\\.omni\\.Omni$", title = "^Omni Quick Ask$" }, {

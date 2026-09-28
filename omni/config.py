@@ -44,12 +44,18 @@ class Settings:
     elevenlabs_voice_id: str = ""
     elevenlabs_model: str = "eleven_flash_v2_5"
     piper_voice: str = ""
+    offline_voice: str = "pocket"  # used when ElevenLabs is unavailable: "pocket" (Piper while it loads) or "piper"
     # Voice input.
     wake_word: bool = True
-    wake_model: str = "hey_jarvis"
+    wake_model: str = "omni"  # "omni": listen for the name in transcripts; otherwise an openWakeWord model
     wake_threshold: float = 0.5
     whisper_model: str = "base.en"
+    stt: str = "moonshine"  # "moonshine" (streaming; Whisper if it cannot load) or "whisper" (batch after the turn)
+    stt_model: str = ""  # engine-specific model name; empty means the engine's default
     end_silence: float = 1.0
+    turn_detector: str = "smart"  # "smart" (Smart Turn model; end_silence if it cannot load) or "silence"
+    turn_threshold: float = 0.5  # Smart Turn: end the turn when p(finished) reaches this
+    turn_max_silence: float = 1.5  # Smart Turn: end the turn after this much silence regardless
     # Nested agents.
     delegate_default: str = "background"
     terminal: str = "foot"

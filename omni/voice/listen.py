@@ -2,14 +2,16 @@
 
 One `pw-record` stream feeds 32 ms chunks to Silero VAD and 80 ms frames to
 openWakeWord. An utterance ends after `end_silence` seconds of trailing silence,
-is transcribed locally with faster-whisper, and goes straight to the session.
+is transcribed locally (`stt.py`), and goes straight to the session. `turn.py`
+decides when the speaker has finished.
 While Omni is speaking, sustained speech on the mic is a barge-in: playback
 stops, the turn is interrupted, and the new utterance is captured (with the
 pre-roll, so the first word is not lost). Barge-in relies on echo cancellation
 (PipeWire's echo-cancel module or the speakerphone's own) so Omni does not
 interrupt itself; see docs/voice.md.
 
-Needs: numpy, openwakeword, pysilero-vad, faster-whisper (pip), pw-record.
+Needs: numpy, openwakeword, pysilero-vad, faster-whisper (pip), pw-record. The
+`mic_command` setting replaces pw-record (the bench feeds WAV files through it).
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ import collections
 import logging
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import threading
@@ -26,60 +29,77 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+# pysilero-vad bundles libgomp, whose workers busy-wait between our 32 ms calls: ~45% of a core
+# while idle on Linux. Passive waiting brings the always-on loop to a few percent; libgomp reads
+# this when it loads, so it must be set before the imports below.
+os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
+
 import numpy as np
-from faster_whisper import WhisperModel
 from openwakeword.model import Model as WakeModel
 from pysilero_vad import SileroVoiceActivityDetector
+
+from .speak import WAKE_PHRASES, addressed, is_echo, talk_over
+from .stt import make_transcriber
+from .turn import make_turn_detector
 
 log = logging.getLogger("omni.listen")
 RATE = 16000
 CHUNK = 512            # Silero's window: 32 ms
 WAKE_FRAME = 1280      # openWakeWord's frame: 80 ms
-PREROLL = int(0.6 * RATE / CHUNK)
+PREROLL = int(1.0 * RATE / CHUNK)  # long enough to keep "Omni," when a pause follows it
 SPEECH_PROB = 0.5
 BARGE_CHUNKS = 8       # ~256 ms of sustained speech while Omni talks
+BARGE_FLOOR = -45.0    # dBFS over those chunks; a speakerphone's own AEC leaks Omni's voice at about -55
 START_CHUNKS = 6       # ~190 ms to start a continuous-mode utterance
 MAX_SECONDS = 30
 NO_SPEECH_SECONDS = 5
-WAKE_PHRASES = re.compile(r"^\s*(hey[, ]+)?(omni|jarvis|omi)[,.!]?\s*", re.I)
 VOXTYPE_STATE = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "voxtype/state"
+SEND_GRACE = 2.0       # a hotkey press this soon after capture ended was meant as "send", not "listen again"
 
 
 class VoiceLoop:
     def __init__(self, daemon, loop: asyncio.AbstractEventLoop):
-        if not shutil.which("pw-record"):
+        settings = daemon.settings
+        if not settings.extra.get("mic_command") and not shutil.which("pw-record"):
             raise RuntimeError("pw-record is missing")
         self.daemon, self.loop = daemon, loop
-        settings = daemon.settings
         self.settings = settings
         self.wake_enabled = settings.wake_word
         self.continuous = False
         self.barge_in = settings.extra.get("barge_in", True)
+        self.barge_floor = float(settings.extra.get("barge_floor", BARGE_FLOOR))
         self.speaking = False
         self._ptt = threading.Event()
         self._stop_capture = threading.Event()
         self._once: asyncio.Future | None = None
         self._capturing = False
+        self._capture_ended = 0.0
+        self._named_until = 0.0  # after a bare "Omni", the next utterance is for Omni without the name
         self._purpose = "request"
         self._transcriber = ThreadPoolExecutor(1, thread_name_prefix="whisper")
         self.vad = SileroVoiceActivityDetector()
+        # Wake by name: every utterance is transcribed locally and only ones addressed to "Omni" are sent.
+        # No model to train, and the request can follow the name in one breath ("Omni, open Files").
+        self.wake_by_name = settings.wake_model.lower() == "omni"
         wake_model = str(Path(settings.wake_model).expanduser()) if "/" in settings.wake_model else settings.wake_model
-        self.wake = WakeModel(wakeword_models=[wake_model], inference_framework="onnx") if settings.wake_word else None
-        self.whisper: WhisperModel | None = None
+        self.wake = (WakeModel(wakeword_models=[wake_model], inference_framework="onnx")
+                     if settings.wake_word and not self.wake_by_name else None)
+        self.stt = make_transcriber(settings)
+        self.turn = make_turn_detector(settings)
         self.mic: subprocess.Popen | None = None
         self.last_error = ""
 
     # ---- control from the daemon (event-loop thread) --------------------------------
 
     def start(self) -> None:
-        threading.Thread(target=self._load_whisper, name="whisper-load", daemon=True).start()
+        threading.Thread(target=self.stt.load, name="stt-load", daemon=True).start()
         threading.Thread(target=self._run_forever, name="mic", daemon=True).start()
 
     def push_to_talk(self) -> None:
         """Hotkey: start listening now, or finish the utterance if already listening."""
         if self._capturing:
             self._stop_capture.set()
-        else:
+        elif time.monotonic() - self._capture_ended > SEND_GRACE:
             self._ptt.set()
 
     def set_speaking(self, speaking: bool) -> None:
@@ -101,14 +121,10 @@ class VoiceLoop:
     def describe(self) -> dict:
         return {"available": True, "wake": self.wake_enabled, "wake_model": self.settings.wake_model,
                 "continuous": self.continuous, "barge_in": self.barge_in, "capturing": self._capturing,
-                "whisper": self.settings.whisper_model, "whisper_ready": self.whisper is not None, "error": self.last_error}
+                "stt": self.settings.stt, "whisper": self.settings.whisper_model, "whisper_ready": self.stt.ready,
+                "turn": self.settings.turn_detector, "stt_error": getattr(self.stt, "error", ""), "error": self.last_error}
 
     # ---- mic thread ---------------------------------------------------------------
-
-    def _load_whisper(self) -> None:
-        started = time.monotonic()
-        self.whisper = WhisperModel(self.settings.whisper_model, device="cpu", compute_type="int8")
-        log.info("whisper %s ready in %.1fs", self.settings.whisper_model, time.monotonic() - started)
 
     def _run_forever(self) -> None:
         while True:
@@ -120,31 +136,38 @@ class VoiceLoop:
             time.sleep(3)
 
     def _open_mic(self) -> subprocess.Popen:
-        argv = ["pw-record", "--rate", str(RATE), "--channels", "1", "--format", "s16", "--raw", "-"]
-        if target := self.settings.extra.get("mic_target"):
-            argv[1:1] = ["--target", str(target)]
+        if command := self.settings.extra.get("mic_command"):
+            argv = shlex.split(command)  # must write 16 kHz mono s16 to stdout in real time
+        else:
+            argv = ["pw-record", "--rate", str(RATE), "--channels", "1", "--format", "s16", "--raw", "-"]
+            if target := self.settings.extra.get("mic_target"):
+                argv[1:1] = ["--target", str(target)]
         return subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
 
     def _chunks(self):
         self.mic = self._open_mic()
-        assert self.mic.stdout
-        size = CHUNK * 2
         try:
-            while True:
-                data = self.mic.stdout.read(size)
-                while data and len(data) < size:
-                    more = self.mic.stdout.read(size - len(data))
-                    if not more:
-                        break
-                    data += more
-                if len(data) < size:
-                    raise RuntimeError("microphone stream ended")
+            while data := self._read_chunk():
                 yield data
+            raise RuntimeError("microphone stream ended")
         finally:
             self.mic.kill()
 
+    def _read_chunk(self) -> bytes:
+        """One whole chunk, or b"" at end of stream. A pipe read can return part of a chunk."""
+        assert self.mic and self.mic.stdout
+        size = CHUNK * 2
+        data = self.mic.stdout.read(size)
+        while data and len(data) < size:
+            more = self.mic.stdout.read(size - len(data))
+            if not more:
+                return b""
+            data += more
+        return data or b""
+
     def _run(self) -> None:
         preroll: collections.deque[bytes] = collections.deque(maxlen=PREROLL)
+        power: collections.deque[float] = collections.deque(maxlen=BARGE_CHUNKS)  # mean square per chunk
         wake_buffer = bytearray()
         voiced_run = 0
         dictating, next_check = False, 0.0
@@ -152,6 +175,8 @@ class VoiceLoop:
             preroll.append(chunk)
             probability = self.vad.process_chunk(chunk)
             voiced_run = voiced_run + 1 if probability >= SPEECH_PROB else 0
+            samples = np.frombuffer(chunk, dtype=np.int16).astype(np.float32)
+            power.append(float(np.mean(samples * samples)))
             now = time.monotonic()
             if now >= next_check:
                 dictating, next_check = self._dictating(), now + 0.5
@@ -162,11 +187,13 @@ class VoiceLoop:
                 self._ptt.clear()
                 trigger = "hotkey"
             elif self.speaking:
-                if self.barge_in and voiced_run >= BARGE_CHUNKS:
+                if self.barge_in and voiced_run >= BARGE_CHUNKS and self._loud(power):
+                    # Keep talking while this is transcribed; only speech addressed to Omni interrupts.
                     trigger = "barge-in"
-                    self._call(self.daemon.session.interrupt())
             elif self.continuous and voiced_run >= START_CHUNKS:
                 trigger = "continuous"
+            elif self.wake_by_name and self.wake_enabled and voiced_run >= START_CHUNKS:
+                trigger = "name"
             elif self.wake is not None and self.wake_enabled:
                 wake_buffer += chunk
                 if len(wake_buffer) >= WAKE_FRAME * 2:
@@ -177,57 +204,104 @@ class VoiceLoop:
                         self.wake.reset()
                         trigger = "wake"
             if trigger:
-                log.info("listening (%s)", trigger)
-                keep = list(preroll) if trigger in ("barge-in", "continuous") else []
+                if trigger != "name":
+                    log.info("listening (%s)", trigger)
+                keep = list(preroll) if trigger in ("barge-in", "continuous", "name") else []
                 self._purpose = "answer" if self._once is not None else "request"
-                self._capture(keep, heard_speech=trigger in ("barge-in", "continuous"))
+                self._capture(keep, heard_speech=trigger in ("barge-in", "continuous", "name"), trigger=trigger)
                 preroll.clear()
                 wake_buffer.clear()
                 voiced_run = 0
                 self.vad.reset()
 
-    def _capture(self, initial: list[bytes], heard_speech: bool) -> None:
+    def _capture(self, initial: list[bytes], heard_speech: bool, trigger: str = "") -> None:
         self._capturing = True
         self._stop_capture.clear()
-        self.loop.call_soon_threadsafe(self.daemon.set_listening, True)
+        shown = trigger not in ("barge-in", "name")  # not shown as listening unless it turns out to be for Omni
+        if shown:
+            self.loop.call_soon_threadsafe(self.daemon.set_listening, True)
         audio = bytearray(b"".join(initial))
+        stream = self.stt.start()
+        for chunk in initial:
+            stream.feed(chunk)
+        self.turn.reset(self._purpose)  # replies to a question end sooner when the model is unsure
+        # Talking over Omni: stop it as soon as a streaming partial calls it by name, not after the turn ends.
+        spoken = self.daemon.speaker.recent_text() if trigger == "barge-in" else ""
+        cut = trigger != "barge-in"
         started = time.monotonic()
+        speech_end = started if heard_speech else 0.0  # when the last voiced chunk arrived
         silence = 0.0
         chunk_seconds = CHUNK / RATE
         for chunk in self._chunks_continuing():
             audio += chunk
-            if self.vad.process_chunk(chunk) >= SPEECH_PROB:
-                heard_speech, silence = True, 0.0
+            stream.feed(chunk)
+            probability = self.vad.process_chunk(chunk)
+            now = time.monotonic()
+            if probability >= SPEECH_PROB:
+                heard_speech, silence, speech_end = True, 0.0, now
             else:
                 silence += chunk_seconds
-            elapsed = time.monotonic() - started
+            elapsed = now - started
             if self._stop_capture.is_set() or elapsed > MAX_SECONDS:
                 break
-            if heard_speech and silence >= self.settings.end_silence:
+            if heard_speech and self.turn.update(audio, probability, silence):
                 break
+            if not cut and (partial := stream.partial()) and addressed(partial) is not None and not is_echo(partial, spoken):
+                cut = True
+                log.info("talk-over: %r stops speech", partial)
+                self._call(self.daemon.session.interrupt())
             if not heard_speech and elapsed > NO_SPEECH_SECONDS:
                 audio.clear()
                 break
         ended = time.monotonic()
         self._capturing = False
-        self.loop.call_soon_threadsafe(self.daemon.set_listening, False)
+        self._capture_ended = ended
+        if shown:
+            self.loop.call_soon_threadsafe(self.daemon.set_listening, False)
         if audio:
-            self._transcriber.submit(self._finish, bytes(audio), ended, self._purpose)
+            self._transcriber.submit(self._finish, stream, speech_end or ended, ended, self._purpose, trigger)
         elif self._once and not self._once.done():
             self.loop.call_soon_threadsafe(self._resolve_once, "")
 
+    def _loud(self, power) -> bool:
+        """Room speech, not the faint leak of Omni's own voice that Silero still calls speech."""
+        return 10 * np.log10(sum(power) / len(power) / 32768 ** 2 + 1e-12) >= self.barge_floor
+
     def _chunks_continuing(self):
-        assert self.mic and self.mic.stdout
-        size = CHUNK * 2
-        while True:
-            data = self.mic.stdout.read(size)
-            if len(data) < size:
-                return
+        while data := self._read_chunk():
             yield data
 
-    def _finish(self, audio: bytes, ended: float, purpose: str) -> None:
-        text = self.transcribe(audio)
-        log.info("heard %r in %.2fs", text, time.monotonic() - ended)
+    def _finish(self, stream, speech_end: float, ended: float, purpose: str, trigger: str = "") -> None:
+        text = stream.finish()
+        heard = time.monotonic()
+        # Measured from when the speaker stopped, so the end-of-turn wait counts against latency.
+        timings = {"endpoint": int((ended - speech_end) * 1000), "transcribe": int((heard - ended) * 1000)}
+        self.on_transcript(text, timings, trigger)
+        if trigger == "name":
+            request = addressed(text)
+            if request is None and time.monotonic() < self._named_until:
+                request = text  # "Omni, … <pause> … open Files": the name ended the last capture
+            if request is None:
+                return  # not for Omni; room speech is neither logged nor kept
+            log.info("heard %r %s (addressed by name)", text, timings)
+            if not request.strip(" .,!?"):
+                self._named_until = time.monotonic() + 4.0
+                if not self._capturing:
+                    self._ptt.set()  # just "Omni": listen for the request that follows
+                return
+            self._named_until = 0.0
+            text = request
+        else:
+            log.info("heard %r %s", text, timings)
+        if trigger == "barge-in":
+            action, request = talk_over(text, self.daemon.speaker.recent_text())
+            log.info("talk-over: %s", action)
+            if action == "ignore":
+                return
+            if action == "stop":
+                self._call(self.daemon.session.interrupt())
+                return
+            text = request  # ask() below stops speech and interrupts the turn
         if purpose == "answer":
             self.loop.call_soon_threadsafe(self._resolve_once, text)  # dropped if already answered
             return
@@ -235,19 +309,14 @@ class VoiceLoop:
         if len(text) < 2:
             return
         self.loop.call_soon_threadsafe(self.daemon.set_listening, False, text)
-        self._call(self.daemon.session.ask(text, source="voice", speak=True, t0=ended))
+        self._call(self.daemon.session.ask(text, source="voice", speak=True, t0=speech_end, timings=timings))
 
     def _resolve_once(self, text: str) -> None:
         if self._once and not self._once.done():
             self._once.set_result(text)
 
-    def transcribe(self, audio: bytes) -> str:
-        while self.whisper is None:
-            time.sleep(0.1)
-        samples = np.frombuffer(audio, dtype=np.int16).astype(np.float32) / 32768.0
-        segments, _ = self.whisper.transcribe(samples, language="en", beam_size=1, vad_filter=False,
-                                              without_timestamps=True, condition_on_previous_text=False)
-        return " ".join(segment.text.strip() for segment in segments).strip()
+    def on_transcript(self, text: str, timings: dict, trigger: str) -> None:
+        """Every finished transcription, before it is filtered; the bench overrides this."""
 
     def _call(self, coroutine) -> None:
         future = asyncio.run_coroutine_threadsafe(coroutine, self.loop)

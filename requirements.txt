@@ -1,8 +1,16 @@
 # Voice input (optional: text, hotkeys, and speech output work without these).
 numpy>=1.26
-openwakeword>=0.6
+# openwakeword itself is installed with --no-deps by install.py: on Linux it requires tflite-runtime,
+# which has no wheels past Python 3.11, and Omni only uses its ONNX backend. These are its real deps.
+onnxruntime>=1.10
+scipy>=1.3
+scikit-learn>=1
+tqdm>=4
+requests>=2
 pysilero-vad>=2.0
 faster-whisper>=1.1
+# Streaming transcription (stt = "moonshine"); bundles its own onnxruntime, no torch.
+moonshine-voice==0.1.5
 # The app uses the system PyGObject/GTK 4/libadwaita (pacman: python-gobject gtk4 libadwaita).
 # Claude as the assistant or for delegated work (optional; Codex needs nothing extra).
 claude-agent-sdk>=0.2
