@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 
 from . import hypr, tool
@@ -120,16 +121,58 @@ def app_launch(ctx, app: str, workspace: int | None = None, position: str | None
     entry = find_app(app)
     if workspace:
         workspace_switch(ctx, workspace)
-    before = {w["address"] for w in hypr.windows()}
+    current = hypr.windows()
+    before = {w["address"] for w in current}
+    running = [w for w in current if _is_app(w, entry)]
     launcher = ["uwsm-app", "--", entry["id"] + ".desktop"] if shutil.which("uwsm-app") else ["gtk-launch", entry["id"]]
     _spawn(launcher)
-    created = hypr.new_window(before, 6.0)
+    # A single-instance app just raises its open window, so do not wait long when one is already open.
+    created = hypr.new_window(before, 2.0 if running else 6.0)
     result = {"launched": entry["name"], "address": created["address"] if created else None}
-    if created and position:
-        result["placed"] = hypr.place(created["address"], position)
-    elif not created:
-        result["note"] = "No new window appeared within 6 s; the app may reuse an existing window or still be starting."
+    if created:
+        if position:
+            result["placed"] = hypr.place(created["address"], position)
+        return result
+    if running := [w for w in hypr.windows() if _is_app(w, entry)]:
+        window = running[0]
+        result["address"] = window["address"]
+        result["note"] = (f"{entry['name']} runs one instance: it reused its window on workspace {window['workspace']}. "
+                          "Use window_move to bring that window here; launching again does nothing.")
+        return result
+    # Slow starters (web apps behind a local service) appear later: finish placing them in the background.
+    threading.Thread(target=_finish_launch, args=(before, entry, workspace, position), daemon=True).start()
+    result["note"] = (f"{entry['name']} is still starting. Its window will be put on "
+                      f"{f'workspace {workspace}' if workspace else 'the current workspace'} when it appears "
+                      f"(up to {LATE_WINDOW:.0f} s). Do not launch it again.")
     return result
+
+
+LATE_WINDOW = 30.0
+
+
+def _is_app(window: dict, entry: dict) -> bool:
+    """Whether a window belongs to a desktop entry. Classes rarely match exactly (T3 Code is com.t3tools.T3Code,
+    web apps are chrome-<host>-Default), so compare letters and digits only; titles must match the app's name."""
+    def key(text: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+    names = {key(name) for name in (entry.get("wm_class"), entry["id"], entry["name"]) if len(key(name)) >= 3}
+    title = key(window.get("title", ""))
+    return any(name in key(window["class"]) or title.startswith(name) for name in names)
+
+
+def _finish_launch(before: set[str], entry: dict, workspace: int | None, position: str | None) -> None:
+    window = hypr.new_window(before, LATE_WINDOW)
+    if not window:
+        subprocess.run(["notify-send", "--app-name=Omni", f"{entry['name']} did not open",
+                        f"No window appeared within {LATE_WINDOW:.0f} s."], check=False)
+        return
+    try:
+        if workspace and window["workspace"] != workspace:
+            window_move(None, window["address"], workspace)
+        if position:
+            hypr.place(window["address"], position)
+    except (RuntimeError, ValueError, subprocess.SubprocessError):
+        pass  # the window closed or moved away meanwhile; nothing to report to a finished turn
 
 
 @tool("Open a file, folder, or URL with its default app (xdg-open).", action=True, target={"type": "string"})

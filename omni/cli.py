@@ -8,6 +8,7 @@
   omni memory [search QUERY]             show notes or search memory and past turns
   omni mail intake [IDS]                 sort new mail (the notmuch post-new hook runs this; ids on stdin)
   omni mail digest [--since 12h]         summary of urgent, to-look-at, and digest mail
+  omni issue "SUMMARY" [--agent codex]   flag a problem: gather evidence, open Claude Code on the repo to fix it
   omni key elevenlabs                    store the ElevenLabs API key in the keyring
   omni app | popover                     open the full window or the quick-ask popover
 """
@@ -83,6 +84,25 @@ def mail(args) -> int:
     return 0
 
 
+def issue(args) -> int:
+    """Through omnid when it runs (so the delegation is tracked), else collect and open the terminal here."""
+    request = {"summary": " ".join(args.summary), "agent": args.agent, "turns": args.turns}
+    try:
+        with Client(timeout=60) as client:
+            result = client.call("issue.report", **request)
+    except (DaemonUnavailable, RuntimeError) as exc:
+        if isinstance(exc, RuntimeError) and "unknown op" not in str(exc):
+            raise
+        from . import issues
+        evidence, prompt = issues.prepare(request["summary"], args.turns)
+        result = {"evidence": str(evidence), **issues.launch(prompt, args.agent)}
+    if result.get("error"):
+        print(f"omni: {result['error']} (evidence: {result['evidence']})", file=sys.stderr)
+        return 1
+    print(f"Evidence: {result['evidence']}\nOpened {args.agent} in a terminal ({result.get('id') or result.get('handle')}).")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="omni", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -106,6 +126,10 @@ def main(argv: list[str] | None = None) -> int:
     m = msub.add_parser("digest")
     m.add_argument("--since", default="", help="e.g. 12h or 2d; default is since the last digest")
     m.add_argument("--no-notify", action="store_true")
+    p = sub.add_parser("issue")
+    p.add_argument("summary", nargs="+")
+    p.add_argument("--agent", choices=["claude", "codex"], default="claude")
+    p.add_argument("--turns", type=int, default=12)
     p = sub.add_parser("key")
     p.add_argument("service", choices=["elevenlabs"])
     args = parser.parse_args(argv)
@@ -127,6 +151,8 @@ def main(argv: list[str] | None = None) -> int:
             return ask(" ".join(args.text), args.speak, not args.quiet_tools)
         if args.command == "mail":
             return mail(args)
+        if args.command == "issue":
+            return issue(args)
         if args.command == "listen":
             call("listen")
         elif args.command == "stop":

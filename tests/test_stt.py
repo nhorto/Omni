@@ -199,3 +199,16 @@ class RealModelTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TermsTest(unittest.TestCase):
+    def test_misheard_names(self):
+        try:
+            from omni.voice.stt import fix_terms
+        except ImportError:
+            self.skipTest("numpy is not installed")
+        self.assertEqual(fix_terms("open a quad-code instance and a terminal"), "open a Claude Code instance and a terminal")
+        self.assertEqual(fix_terms("start cloud code in the repo"), "start Claude Code in the repo")
+        self.assertEqual(fix_terms("launch a codecs agent"), "launch a Codex agent")
+        self.assertEqual(fix_terms("move t3 code to workspace three"), "move T3 Code to workspace three")
+        self.assertEqual(fix_terms("the cloud is code red"), "the cloud is code red")

@@ -30,6 +30,7 @@ Then follow the printed steps: add `require("hypr.omni")` to `~/.config/hypr/hyp
 | Super+Shift+H | Talk (press again to send early) |
 | Super+Alt+H | Hands-free listening on/off |
 | Super+Ctrl+H | Stop speaking and interrupt |
+| Super+Alt+Shift+H | Report a problem with the last few turns (see below) |
 
 The wake word is "Omni": say "Omni, open Files" in one breath, or "Omni" and then the request. See [docs/voice.md](docs/voice.md).
 
@@ -40,6 +41,16 @@ omni ask "put a terminal on the left running htop and files on the right"
 omni ask --speak "how did Tennessee do yesterday"
 omni status · omni doctor · omni new · omni stop · omni memory · omni memory search printer
 ```
+
+## Reporting a problem
+
+When Omni gets something wrong, say "Omni, flag that as an issue" or "report a problem: it couldn't open my daily briefing", or run:
+
+```bash
+omni issue "it couldn't open my daily briefing"      # --agent codex to use Codex, --turns N for more history
+```
+
+Omni writes an evidence file to `~/.local/share/omni/issues/` (your summary, the last turns with tool calls, output and timings, the `omnid` journal, git state, settings without secrets, and `omni doctor` results) and opens Claude Code (or Codex) in a terminal on this repo. The agent reads the evidence, finds the cause, fixes it with a test, runs both test suites, restarts `omnid` if needed, and summarizes. It does not commit until you say so. A summary starting with `test:` makes it read the evidence and change nothing.
 
 ## Privacy
 

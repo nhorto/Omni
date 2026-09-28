@@ -15,6 +15,7 @@ Read [PLAN.md](PLAN.md) first. Its "Build status" section says what is done, wha
 | `omni/voice/speak.py` | Sentence chunking, ElevenLabs streaming with Piper fallback, and `SpeechGate` (speak answers, stay quiet after actions) |
 | `omni/voice/listen.py` | Mic loop: wake word, push-to-talk, hands-free, barge-in, faster-whisper |
 | `omni/app/` | GTK 4 + libadwaita app: `quick.py` popover, `window.py` pages, `theme.py` Omarchy colors, `bridge.py` socket to GTK thread |
+| `omni/issues.py` | Issue reports: evidence file (recent turns, journal, git, settings, doctor) in `DATA/issues/` and the fix task for the coding agent that `issue_report` / `omni issue` open |
 | `omni/cli.py`, `omni/client.py` | The `omni` command and the blocking socket client |
 | `integration/` | systemd user units, Hyprland Lua (`hypr/omni.lua`), Quickshell bar plugin, desktop entry |
 | `legacy/` | The v0 build, kept for reference only. Do not import from it |

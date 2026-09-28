@@ -39,7 +39,7 @@ from openwakeword.model import Model as WakeModel
 from pysilero_vad import SileroVoiceActivityDetector
 
 from .speak import STOP_PHRASES, WAKE_PHRASES, addressed, is_echo, talk_over
-from .stt import make_transcriber
+from .stt import fix_terms, make_transcriber
 from .turn import make_turn_detector
 
 log = logging.getLogger("omni.listen")
@@ -399,7 +399,7 @@ class VoiceLoop:
     def _finish(self, stream, speech_end: float, ended: float, purpose: str, trigger: str = "",
                 conversation: bool = False, feedback: Feedback | None = None) -> None:
         done = feedback.finished if feedback else lambda sent, text="": None
-        text = stream.finish()
+        text = fix_terms(stream.finish())
         heard = time.monotonic()
         # Measured from when the speaker stopped, so the end-of-turn wait counts against latency.
         timings = {"endpoint": int((ended - speech_end) * 1000), "transcribe": int((heard - ended) * 1000)}

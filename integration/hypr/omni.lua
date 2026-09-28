@@ -15,6 +15,8 @@ o.bind("SUPER + ALT + H", "Omni hands-free listening", bin .. "omni voice contin
 -- (still reachable from the Omarchy menu).
 hl.unbind("SUPER + CTRL + H")
 o.bind("SUPER + CTRL + H", "Stop Omni", bin .. "omni stop")
+-- Flag a problem with Omni's last few turns: opens Claude Code on the repo to fix it.
+o.bind("SUPER + ALT + SHIFT + H", "Report an Omni problem", bin .. "omni issue 'flagged from hotkey'")
 
 o.window({ class = "^dev\\.omni\\.Omni$", title = "^Omni Quick Ask$" }, {
   float = true,

@@ -525,6 +525,14 @@ async def op_mail_digest(daemon, request, send):
     return await asyncio.to_thread(triage.digest, request.get("since", ""), request.get("notify", True))
 
 
+async def op_issue_report(daemon, request, send):
+    from . import issues
+    evidence, prompt = await asyncio.to_thread(issues.prepare, request["summary"], request.get("turns", 12))
+    result = await daemon.session.delegate(task=prompt, mode="visible", cwd=str(issues.REPO),
+                                           agent=request.get("agent", "claude"), parent=None)
+    return {"evidence": str(evidence), **result}
+
+
 OPS = {
     "ask": op_ask, "subscribe": op_subscribe, "status": op_status, "interrupt": op_interrupt, "answer": op_answer,
     "new_thread": op_new_thread, "listen": op_listen, "voice": op_voice, "stop_speaking": op_stop_speaking, "say": op_say,
@@ -535,6 +543,7 @@ OPS = {
     "episodes": op_episodes, "episode.delete": op_episode_delete, "delegation.stop": op_delegation_stop,
     "settings.get": op_settings_get, "settings.set": op_settings_set, "policy.get": op_policy_get,
     "policy.set": op_policy_set, "doctor": op_doctor, "mail.intake": op_mail_intake, "mail.digest": op_mail_digest,
+    "issue.report": op_issue_report,
 }
 
 

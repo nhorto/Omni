@@ -8,6 +8,7 @@ once the turn has ended. `partial()` is what a streaming engine has heard so far
 from __future__ import annotations
 
 import logging
+import re
 import time
 
 import numpy as np
@@ -59,6 +60,20 @@ class WhisperStream:
 
     def finish(self) -> str:
         return self.engine.transcribe(bytes(self.audio))
+
+
+# Names speech-to-text reliably mishears, as Nick says them.
+TERMS = [
+    (re.compile(r"\b(?:quad|quod|cloud|clawed|clod|claud|claude)[- ]?code\b", re.I), "Claude Code"),
+    (re.compile(r"\bcodecs\b", re.I), "Codex"),
+    (re.compile(r"\bt[- ]?(?:3|three)[- ]?code\b", re.I), "T3 Code"),
+]
+
+
+def fix_terms(text: str) -> str:
+    for pattern, name in TERMS:
+        text = pattern.sub(name, text)
+    return text
 
 
 def make_transcriber(settings):

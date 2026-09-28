@@ -225,6 +225,7 @@ Migrate the existing `memory` and `knowledge` tables into `USER.md`/`MEMORY.md` 
 
 - `mode: "visible"` opens a Foot terminal running `codex` (or `claude`) interactively in `cwd` with the task as the first prompt. Nick watches and can take over. Omni gets a handle and is told when the process exits; it does not read the transcript unless asked.
 - `mode: "background"` starts a separate app-server thread (or Claude SDK session) with the task, headless, in `cwd`. Omni receives the final message and speaks a one-line summary or drops a report in `~/Documents/Omni Reports/<date>-<slug>.md` for long results. Background work is logged as its own episode.
+- **Issue reports** (`issue_report` tool, `omni issue`, Super+Alt+Shift+H): `omni/issues.py` writes an evidence file (last turns with tool calls and timings, omnid journal, git state, settings without secrets, doctor) to `~/.local/share/omni/issues/`, plus a task file beside it, and opens Claude Code (or Codex) visibly in the repo with "Read <task file> and do what it says". Verified 2026-09-27: `omni issue "test: ..."` opened Claude Code in Foot, which read the task and evidence without a permission prompt and changed nothing.
 - Default mode comes from the request ("in a terminal", "so I can watch" → visible) and a Settings default. Background delegations count against the same daily budget and show in Activity while running, with a Stop button.
 
 ## Email

@@ -59,7 +59,7 @@ def tool(summary: str, /, *, action: bool = False, ask: bool = False, confirm: C
 
 
 def load_all() -> dict[str, Tool]:
-    from . import desktop, terminal, research, memory_tools, reminders, voice, delegate, mail  # noqa: F401
+    from . import desktop, terminal, research, memory_tools, reminders, voice, delegate, mail, issues  # noqa: F401
     return REGISTRY
 
 

@@ -68,6 +68,39 @@ class KeyChordTest(unittest.TestCase):
         self.assertEqual(spoken_prompt("approval", text), "Should I delete files found by find?")
 
 
+class AppLaunchTest(unittest.TestCase):
+    T3 = {"id": "t3code", "name": "T3 Code", "comment": "", "wm_class": "t3code"}
+    OPEN = {"address": "0x1", "class": "com.t3tools.T3Code", "title": "T3 Code (Alpha)", "workspace": 1}
+
+    def launch(self, entry, windows, created=None):
+        from omni.tools import desktop
+        with patch.object(desktop, "find_app", return_value=entry), patch.object(desktop, "_spawn"), \
+                patch.object(desktop, "workspace_switch"), patch.object(desktop.hypr, "windows", return_value=windows), \
+                patch.object(desktop.hypr, "new_window", return_value=created) as waited, \
+                patch.object(desktop.threading, "Thread") as thread:
+            return desktop.app_launch(None, entry["name"], workspace=3), waited, thread
+
+    def test_a_single_instance_app_reports_its_open_window_quickly(self):
+        result, waited, thread = self.launch(self.T3, [self.OPEN])
+        self.assertEqual(waited.call_args.args[1], 2.0)
+        self.assertEqual(result["address"], "0x1")
+        self.assertIn("workspace 1", result["note"])
+        thread.assert_not_called()
+
+    def test_a_web_app_is_matched_by_its_title(self):
+        from omni.tools.desktop import _is_app
+        entry = {"id": "Daily Briefing", "name": "Daily Briefing", "comment": "", "wm_class": ""}
+        self.assertTrue(_is_app({"class": "chrome-127.0.0.1__-Default", "title": "Daily Briefing"}, entry))
+        self.assertFalse(_is_app({"class": "chromium", "title": "News about daily briefings"}, entry))
+
+    def test_a_slow_app_is_placed_when_it_appears(self):
+        entry = {"id": "Daily Briefing", "name": "Daily Briefing", "comment": "", "wm_class": ""}
+        result, waited, thread = self.launch(entry, [])
+        self.assertEqual(waited.call_args.args[1], 6.0)
+        thread.return_value.start.assert_called_once()
+        self.assertIn("still starting", result["note"])
+
+
 class ResearchTest(unittest.TestCase):
     def test_scoreboard_parsing(self):
         payload = {"day": {"date": "2026-09-26"}, "events": [{"date": "2026-09-26T16:00Z", "competitions": [{
