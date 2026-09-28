@@ -51,9 +51,11 @@ class FollowUpTest(unittest.TestCase):
         voice.said = "It's 72 and sunny in Knoxville right now."
         self.voice = voice
 
-    def hear(self, text):
+    def hear(self, text, trigger="name"):
+        """An utterance ends now; whether it is in the conversation is decided as the mic loop does."""
         now = time.monotonic()
-        self.voice._finish(FakeStream(text), now, now, "request", "name", now)
+        conversation = self.voice._conversing and now < self.voice._follow_up_until
+        self.voice._finish(FakeStream(text), now, now, "request", trigger, conversation)
 
     def answered(self):
         """Omni took a spoken request and finished saying its answer."""
@@ -104,6 +106,24 @@ class FollowUpTest(unittest.TestCase):
         self.voice.said = "Done."
         self.answered()
         self.assertLess(self.voice._follow_up_until - time.monotonic(), 20)
+
+    def test_talking_while_omni_thinks_or_speaks_counts(self):
+        self.voice._close_follow_up(conversing=True)  # a spoken request was just sent
+        self.hear("and also check the forecast for Saturday")
+        self.assertEqual(self.voice.asked, [("ask", "and also check the forecast for Saturday")])
+
+    def test_talking_over_omni_in_a_conversation_is_a_reply(self):
+        self.voice._close_follow_up(conversing=True)
+        self.voice.set_speaking(True)
+        self.hear("actually open it on workspace four instead", trigger="barge-in")
+        self.assertEqual(self.voice.asked, [("ask", "actually open it on workspace four instead")])
+
+    def test_a_decision_made_in_the_window_survives_a_slow_transcript(self):
+        self.answered()
+        now = time.monotonic()
+        self.voice._close_follow_up()  # the window closes while a long utterance is still transcribing
+        self.voice._finish(FakeStream("so what else can you do for me today"), now, now, "request", "name", True)
+        self.assertEqual(self.voice.asked, [("ask", "so what else can you do for me today")])
 
     def test_follow_up_zero_turns_it_off(self):
         self.voice.settings.follow_up = 0

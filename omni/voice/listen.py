@@ -116,8 +116,8 @@ class VoiceLoop:
     def follow_up(self) -> None:
         """Omni has answered a spoken request: listen a few seconds for a reply that does not use the name."""
         seconds = float(self.settings.follow_up)
-        if not self._conversing or seconds <= 0 or self._once is not None:
-            return
+        if not self._conversing or self._once is not None:
+            return  # no conversation, or an approval or question is listening for its own answer
         if self.daemon.speaker.recent_text(10).rstrip().endswith("?"):
             seconds *= 2  # Omni asked something: give time to think
         self._follow_up_until = time.monotonic() + seconds
@@ -132,8 +132,9 @@ class VoiceLoop:
 
     def _close_follow_up(self, conversing: bool = False) -> None:
         was_open = self._follow_up_timer is not None
-        self._conversing = conversing
-        self._follow_up_until = 0.0
+        self._conversing = conversing and float(self.settings.follow_up) > 0
+        # In a conversation the window stays open while Omni thinks and speaks; it closes `follow_up` s after.
+        self._follow_up_until = float("inf") if self._conversing else 0.0
         if self._follow_up_timer:
             self._follow_up_timer.cancel()
             self._follow_up_timer = None
@@ -263,6 +264,7 @@ class VoiceLoop:
         # Talking over Omni: stop it as soon as a streaming partial calls it by name, not after the turn ends.
         spoken = self.daemon.speaker.recent_text() if trigger == "barge-in" else ""
         cut = trigger != "barge-in"
+        conversation = self._conversing and time.monotonic() < self._follow_up_until
         started = time.monotonic()
         speech_end = started if heard_speech else 0.0  # when the last voiced chunk arrived
         silence = 0.0
@@ -294,7 +296,9 @@ class VoiceLoop:
         if shown:
             self.loop.call_soon_threadsafe(self.daemon.set_listening, False)
         if audio:
-            self._transcriber.submit(self._finish, stream, speech_end or ended, ended, self._purpose, trigger, started)
+            # Decided now, not when the transcript is ready: a long utterance may finish after the window closes.
+            conversation = conversation or self._conversing and ended < self._follow_up_until
+            self._transcriber.submit(self._finish, stream, speech_end or ended, ended, self._purpose, trigger, conversation)
         elif self._once and not self._once.done():
             self.loop.call_soon_threadsafe(self._resolve_once, "")
 
@@ -306,7 +310,8 @@ class VoiceLoop:
         while data := self._read_chunk():
             yield data
 
-    def _finish(self, stream, speech_end: float, ended: float, purpose: str, trigger: str = "", began: float = 0.0) -> None:
+    def _finish(self, stream, speech_end: float, ended: float, purpose: str, trigger: str = "",
+                conversation: bool = False) -> None:
         text = stream.finish()
         heard = time.monotonic()
         # Measured from when the speaker stopped, so the end-of-turn wait counts against latency.
@@ -316,14 +321,15 @@ class VoiceLoop:
             request = addressed(text)
             if request is None and time.monotonic() < self._named_until:
                 request = text  # "Omni, … <pause> … open Files": the name ended the last capture
-            elif request is None and began < self._follow_up_until and not is_echo(text, self.daemon.speaker.recent_text()):
+            elif request is None and conversation and not is_echo(text, self.daemon.speaker.recent_text()):
                 if STOP_PHRASES.match(text.strip()) and len(text.split()) <= 4:
                     self.loop.call_soon_threadsafe(self.end_conversation)  # "thanks", "never mind"
                     return
                 request = text  # a reply in the conversation: no name needed
             if request is None:
                 # Not for Omni. Room speech is neither logged nor kept; the count shows a request was missed.
-                log.info("ignored %d words not addressed to Omni", len(text.split()))
+                log.info("ignored %d words not addressed to Omni %s (conversation %s)", len(text.split()), timings,
+                         "on" if self._conversing else "off")
                 return
             log.info("heard %r %s (addressed by name)", text, timings)
             if not request.strip(" .,!?"):
@@ -337,6 +343,8 @@ class VoiceLoop:
             log.info("heard %r %s", text, timings)
         if trigger == "barge-in":
             action, request = talk_over(text, self.daemon.speaker.recent_text())
+            if action == "ignore" and conversation and len(text.split()) >= 3 and not is_echo(text, self.daemon.speaker.recent_text()):
+                action, request = "ask", text  # talking over Omni mid-conversation: a reply, no name needed
             log.info("talk-over: %s", action)
             if action == "ignore":
                 return
